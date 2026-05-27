@@ -17,7 +17,7 @@ else
     git commit -m "$COMMIT_MSG"
 fi
 
-echo "🚀 Pushing to remote repository..."
-git push
+echo "🚀 Pushing to remote repository (current branch)..."
+git push origin HEAD
 
 echo "✅ Done!"
