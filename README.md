@@ -1,51 +1,34 @@
 # A8S TUI
 
-A LazyVim-style terminal UI for A8S. It logs in with Keycloak, keeps tokens in memory for the current session, fetches live projects from the backend, and supports single-instance database deployment with live deployment logs.
+A Bubble Tea terminal dashboard for A8S. It logs in with Keycloak, keeps tokens in memory for the current session, fetches live workspace projects from the backend, and supports single-instance database deployment with live deployment logs.
+
+## Features
+
+- Launcher screen with only `Login with Keycloak` and `Quit`
+- Smooth dashboard layout with a sidebar, full-content workspace, padding, outlines, and Nerd Font icons
+- Workspace section with `Projects` and `Deployment`
+- Security section with `Image Scanner`
+- Observability section with `Logs` and `Monitoring`
+- Settings section with `User` preferences and light/dark mode switching
+- Project detail overview with connection profile, backup history, and real database connection data when the backend returns it
+- Deployment type picker for `Single database`, `Database cluster`, `Monolithic`, and `Microservices`
+- Single database deployment form with engine, version, and size selectors
+- Live deployment log screen that polls backend deployment status
+
+The UI is built with:
+
+- Bubble Tea for app state, input, and update loop
+- Lip Gloss for colors, borders, padding, and layout
+- Nerd Font glyphs for sidebar and project icons
+- Bubbles-compatible patterns for terminal components
 
 ## Requirements
 
 - Go `1.26.3` or newer
 - A terminal with color support
+- A Nerd Font installed and selected in your terminal
 - Browser access for Keycloak login
 - A configured A8S backend
-
-## Environment
-
-The TUI is standalone and reads environment values in this order, with later sources overriding earlier ones:
-
-1. `tui/.env`
-2. Process environment variables
-
-Copy any needed values from the frontend env into `tui/.env`; the TUI does not require `a8s-frontend` or `a8s-backend` to be present.
-
-Required Keycloak values:
-
-```env
-KEYCLOAK_URL=https://keycloak.example.com
-KEYCLOAK_REALM=a8s
-KEYCLOAK_CLIENT_ID=a8s-frontend
-KEYCLOAK_CLIENT_SECRET=replace-with-client-secret
-KEYCLOAK_REDIRECT_URL=http://localhost:8250/callback
-```
-
-Backend URL values are checked in this order:
-
-```env
-BACKEND_API_BASE_URL=
-BACKEND_API_URL=
-API_URL=
-NEXT_PUBLIC_BACKEND_API_BASE_URL=
-NEXT_PUBLIC_BACKEND_API_URL=
-NEXT_PUBLIC_API_URL=
-```
-
-If no backend URL is set, the TUI falls back to:
-
-```env
-http://localhost:8080
-```
-
-Do not commit real secrets.
 
 ## Run
 
@@ -56,7 +39,7 @@ cd tui
 go run .
 ```
 
-To run tests:
+Run tests:
 
 ```bash
 cd tui
@@ -66,30 +49,65 @@ go test ./...
 ## Login Flow
 
 1. Start the TUI with `go run .`.
-2. Press `enter` on the launcher, or press `l`.
+2. Select `Login with Keycloak`.
 3. Your browser opens the Keycloak login page.
 4. After login, Keycloak redirects to `KEYCLOAK_REDIRECT_URL`.
-5. The browser shows a login success page.
-6. Return to the terminal; projects load automatically.
+5. Return to the terminal; the TUI loads live projects automatically.
 
-Tokens are kept in memory only. Closing the TUI clears the session.
+Tokens are kept in memory only. Closing or logging out clears the session.
 
-## Project Dashboard
+## Dashboard
 
-After login, the dashboard shows:
+After login, the sidebar contains:
 
-- Left sidebar: project categories and counts
-- Main pane: live project list
-- Right pane: selected project details
-- Bottom statusline: count, refresh time, and key hints
+```text
+Workspace
+  Projects
+  Deployment
 
-Project data is fetched with the logged-in Keycloak token.
+Security
+  Image Scanner
 
-## Database Deployment
+Observability
+  Logs
+  Monitoring
 
-Press `d` after login to deploy a single-instance database.
+Settings
+  User
+```
 
-Fields:
+The `Projects` page shows live database deployments, monolith apps, and microservice workspaces returned by the backend. Press `enter` on a project to open its detail page.
+
+## Project Detail
+
+The project detail page shows:
+
+- Overview data: engine, mode, namespace, and updated time
+- Connection profile: hostname, port, database, username, engine, version, namespace, and JDBC URL when available
+- Backup history placeholder
+
+For database projects, the TUI hydrates connection details by fetching the first deployment ID from `databaseDeploymentIds` through:
+
+```text
+GET /api/v1/database-deployments/{deploymentId}
+```
+
+`Hostname`, `Port`, and `JDBC URL` are rendered only when real backend data is available. They are not hardcoded.
+
+## Deployment
+
+Open `Deployment` from the sidebar or press `d`.
+
+The deployment page lists:
+
+- Single database
+- Database cluster
+- Monolithic
+- Microservices
+
+Only `Single database` is currently active. Other deployment types are shown as coming soon.
+
+The single database form supports:
 
 - Project name
 - Engine
@@ -99,7 +117,7 @@ Fields:
 - Version
 - Size
 
-Supported engines in the form:
+Supported engines:
 
 - PostgreSQL
 - MySQL
@@ -107,7 +125,22 @@ Supported engines in the form:
 - Redis
 - Cassandra
 
-After submit, the TUI opens a deployment log screen and polls the backend deployment detail endpoint. Logs are shown from the backend `statusLog`.
+After submit, the TUI opens a deployment log screen and polls:
+
+```text
+GET /api/v1/database-deployments/{deploymentId}
+```
+
+Logs are shown from backend `statusLog`.
+
+## User Settings
+
+Open `User` under Settings to change appearance.
+
+Press `t`, `space`, or `enter` to switch between:
+
+- Dark mode
+- Light mode
 
 ## Keyboard
 
@@ -123,15 +156,38 @@ q               quit
 Dashboard:
 
 ```text
-up/down or j/k  move project selection
-left/right      change focused pane
-tab             cycle focused pane
+up/down or j/k  move selected project, sidebar item, or deployment type
+left/right      cycle focus area
+tab             cycle focus area
+enter           open selected project, sidebar page, or deployment type
 /               filter projects
-backspace       clear filter
+backspace       clear project filter
 r               refresh live projects
-d               deploy database
+p               open Projects
+d               open Deployment
+i               open Image Scanner
+g               open Logs
+m               open Monitoring
+u or s          open User settings
 o               logout
-q, esc, ctrl+c  quit
+esc             close current section back to Projects, or quit from Projects
+q or ctrl+c     quit
+```
+
+Project detail:
+
+```text
+b or esc        back to Projects
+q or ctrl+c     quit
+```
+
+Deployment type list:
+
+```text
+up/down or j/k  move deployment type
+enter           open selected deployment type
+esc             close Deployment back to Projects
+q or ctrl+c     quit
 ```
 
 Database form:
@@ -150,7 +206,15 @@ Deployment logs:
 ```text
 up/down or j/k  scroll logs
 r               refresh logs now
-b or esc        back to projects
+b or esc        back to Projects and refresh project list
+q or ctrl+c     quit
+```
+
+User settings:
+
+```text
+t, space, enter switch light/dark mode
+esc             back to Projects
 q or ctrl+c     quit
 ```
 
@@ -160,6 +224,8 @@ If the TUI says required env values are missing, check `tui/.env`.
 
 If login does not return to the TUI, confirm `KEYCLOAK_REDIRECT_URL` uses the same localhost callback configured in Keycloak.
 
-If project loading fails after login, confirm the backend URL is correct and the backend accepts the Keycloak JWT.
+If projects fail to load after login, confirm the backend URL is correct and the backend accepts the Keycloak JWT.
+
+If Hostname, Port, or JDBC URL do not appear in project detail, confirm the backend deployment detail response includes `serviceHost` and `servicePort`.
 
 If deployment logs do not update, the deployment may not have returned an ID or the backend may not be writing `statusLog` yet.
