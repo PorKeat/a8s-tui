@@ -205,9 +205,6 @@ func (m model) View() tea.View {
 	if m.deployLogOpen {
 		return m.databaseDeployLogView(width, height)
 	}
-	if m.dbFormOpen {
-		return m.databaseDeployView(width, height)
-	}
 	bodyHeight := max(height-1, 18)
 	sidebarWidth := 31
 	if width < 96 {
@@ -223,7 +220,11 @@ func (m model) View() tea.View {
 		b.WriteString(backgroundLine(main[i], mainWidth, bgDark))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.statusline(width))
+	if m.dbFormOpen {
+		b.WriteString(m.databaseFormStatusline(width))
+	} else {
+		b.WriteString(m.statusline(width))
+	}
 
 	view := tea.NewView(b.String())
 	view.AltScreen = true
@@ -625,7 +626,7 @@ func itemIcon(item navigationItem) string {
 	}
 	switch item.page {
 	case pageProjects:
-		return fgBlue + nfProject + reset
+		return fgBlue + nfFolder + reset
 	case pageDeployment:
 		return fgOrange + nfDeploy + reset
 	case pageImageScanner:
@@ -825,6 +826,12 @@ func (m model) renderDashboardSidebar(width, height int) []string {
 }
 
 func (m model) renderDashboardMain(width, height int) []string {
+	if m.dbFormOpen {
+		return m.renderDashboardDatabaseDeployForm(width, height)
+	}
+	if m.projectDetailOpen {
+		return m.renderDashboardProjectDetail(width, height)
+	}
 	selected := m.selectedNavigationItem()
 	if selected.page == pageDeployment {
 		return m.renderDashboardDeployment(width, height)
@@ -890,6 +897,22 @@ func (m model) renderDashboardProjects(width, height int) []string {
 	return fillStyled(lines, bgDark, width, height)
 }
 
+func (m model) renderDashboardProjectDetail(width, height int) []string {
+	project, ok := m.selectedProject()
+	if !ok {
+		return m.renderDashboardProjects(width, height)
+	}
+	lines := make([]string, 0, height)
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, mainTextLine("Overview", mainTitleStyle(colorBgMain), width))
+	lines = append(lines, mainTextLine("Press esc or b to go back to Projects.", mainMutedStyle(colorBgMain), width))
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, projectOverviewCard(project, width)...)
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, projectDetailColumns(project, width)...)
+	return fillStyled(lines, bgDark, width, height)
+}
+
 func (m model) renderDashboardFeature(width, height int) []string {
 	if m.page == pageDeployment {
 		return m.renderDashboardDeployment(width, height)
@@ -919,6 +942,17 @@ func (m model) renderDashboardDeployment(width, height int) []string {
 		helpText = "Press esc to close the selected deployment type."
 	}
 	lines = append(lines, mainTextLine(helpText, mainMutedStyle(colorBgMain), width))
+	return fillStyled(lines, bgDark, width, height)
+}
+
+func (m model) renderDashboardDatabaseDeployForm(width, height int) []string {
+	lines := make([]string, 0, height)
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, mainTextLine("Single database", mainTitleStyle(colorBgMain), width))
+	lines = append(lines, mainTextLine("Create a single-instance database deployment.", mainBodyStyle(colorBgMain), width))
+	lines = append(lines, mainLine("", width))
+	lines = append(lines, databaseDeployFormCard(m, width)...)
 	return fillStyled(lines, bgDark, width, height)
 }
 
@@ -1113,6 +1147,236 @@ func emptyProjectCard(width int) []string {
 	return lines
 }
 
+func projectOverviewCard(project liveProject, width int) []string {
+	cardWidth := max(width-6, 42)
+	card := styleCard.Width(cardWidth)
+	title := mainTitleStyle(colorBgCard)
+	body := mainBodyStyle(colorBgCard)
+	muted := mainMutedStyle(colorBgCard)
+	status := projectStatusLabel(project)
+	subtitle := joinNonEmpty(project.Engine, project.DeploymentMode, "version "+project.Version)
+	if subtitle == "" {
+		subtitle = firstNonEmpty(project.Kind, "project")
+	}
+	projectName := truncatePlain(project.Name, max(cardWidth-18, 8))
+	header := title.Render("  "+projectName+" ") +
+		mainPrimaryStyle(colorBgCard).Render(status)
+	lines := []string{
+		cardContentLine(card, "", width),
+		cardContentLine(card, header, width),
+		cardContentLine(card, body.Render("  ")+muted.Render(truncatePlain(subtitle, cardWidth-4)), width),
+		cardContentLine(card, "", width),
+	}
+	summary := []struct {
+		label string
+		value string
+	}{
+		{"Engine", firstNonEmpty(project.Engine, project.Kind, "n/a")},
+		{"Mode", firstNonEmpty(project.DeploymentMode, project.ArchitectureType, "n/a")},
+		{"Namespace", firstNonEmpty(project.Namespace, "n/a")},
+		{"Updated", firstNonEmpty(shortTime(project.UpdatedAt), "n/a")},
+	}
+	for _, item := range summary {
+		lines = append(lines, projectInfoPill(card, cardWidth, width, item.label, item.value)...)
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, cardContentLine(card, body.Render("  ")+body.Render("Use the connection profile to connect from your database client."), width))
+	lines = append(lines, cardContentLine(card, "", width))
+	return lines
+}
+
+func projectInfoPill(card lipgloss.Style, cardWidth, width int, label, value string) []string {
+	boxWidth := max(cardWidth-4, 24)
+	labelStyle := mainMutedStyle(colorBgCard)
+	valueStyle := mainTitleStyle(colorBgCard)
+	content := labelStyle.Render(truncatePlain(label, 18)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		valueStyle.Render(truncatePlain(value, max(boxWidth-24, 8)))
+	box := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgCard)).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colorBorder)).
+		BorderBackground(lipgloss.Color(colorBgCard)).
+		Render(content)
+	var lines []string
+	for _, line := range strings.Split(box, "\n") {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
+func projectDetailInfoBox(boxWidth int, label, value string) []string {
+	boxWidth = max(boxWidth, 24)
+	labelStyle := mainMutedStyle(colorBgCard)
+	valueStyle := mainBodyStyle(colorBgCard)
+	labelWidth := min(14, max(boxWidth/3, 8))
+	valueWidth := max(boxWidth-labelWidth-8, 8)
+	content := labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		valueStyle.Render(truncatePlain(value, valueWidth))
+	box := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgCard)).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colorBorder)).
+		BorderBackground(lipgloss.Color(colorBgCard)).
+		Render(content)
+	return repairCardLines(strings.Split(box, "\n"))
+}
+
+func projectDetailColumns(project liveProject, width int) []string {
+	leftWidth := max((width-8)/2, 36)
+	rightWidth := max(width-leftWidth-6, 30)
+	left := projectConnectionCard(project, leftWidth)
+	right := projectBackupCard(rightWidth)
+	rowCount := max(len(left), len(right))
+	lines := make([]string, 0, rowCount)
+	for i := 0; i < rowCount; i++ {
+		leftLine := styleMain.Render(spaces(leftWidth))
+		rightLine := styleMain.Render(spaces(rightWidth))
+		if i < len(left) {
+			leftLine = left[i]
+		}
+		if i < len(right) {
+			rightLine = right[i]
+		}
+		content := styleMain.Render("   ") + leftLine + styleMain.Render("   ") + rightLine
+		lines = append(lines, mainContentLine(content, width))
+	}
+	return lines
+}
+
+func projectConnectionCard(project liveProject, width int) []string {
+	card := styleCard.Width(width)
+	title := mainTitleStyle(colorBgCard)
+	body := mainBodyStyle(colorBgCard)
+	muted := mainMutedStyle(colorBgCard)
+	hostname := projectConnectionHostname(project)
+	port := projectConnectionPort(project)
+	jdbcURL := projectJDBCURL(project)
+	var rows []struct {
+		label string
+		value string
+	}
+	addRow := func(label, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		rows = append(rows, struct {
+			label string
+			value string
+		}{label: label, value: strings.TrimSpace(value)})
+	}
+	addRow("Hostname", hostname)
+	addRow("Port", port)
+	addRow("Database", firstNonEmpty(project.DatabaseName, project.Name))
+	addRow("Username", project.DatabaseUsername)
+	addRow("Engine", project.Engine)
+	addRow("Version", project.Version)
+	addRow("Namespace", project.Namespace)
+	addRow("JDBC URL", jdbcURL)
+	if len(rows) == 0 {
+		addRow("Status", "No connection details yet.")
+	}
+	lines := []string{
+		card.Render(""),
+		card.Render(mainBodyStyle(colorBgCard).Render("  ") + title.Render("Connection Profile")),
+		card.Render(""),
+	}
+	labelWidth := 11
+	valueWidth := max(width-labelWidth-6, 8)
+	for _, row := range rows {
+		content := body.Render("  ") +
+			muted.Render(pad(truncatePlain(row.label, labelWidth), labelWidth)) +
+			body.Render("  ") +
+			body.Render(truncatePlain(row.value, valueWidth))
+		lines = append(lines, card.Render(content))
+	}
+	lines = append(lines, card.Render(""))
+	return repairCardLines(lines)
+}
+
+func projectConnectionHostname(project liveProject) string {
+	return firstNonEmpty(project.ServiceHost)
+}
+
+func projectConnectionPort(project liveProject) string {
+	if project.ServicePort <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", project.ServicePort)
+}
+
+func projectJDBCURL(project liveProject) string {
+	host := projectConnectionHostname(project)
+	port := projectConnectionPort(project)
+	database := firstNonEmpty(project.DatabaseName, project.Name)
+	if host == "" || port == "" || database == "" {
+		return ""
+	}
+	tlsEnabled := project.RequireSSL || project.ConnectionTLSEnabled
+	switch strings.ToLower(strings.TrimSpace(project.Engine)) {
+	case "postgresql", "postgres":
+		sslMode := "disable"
+		if tlsEnabled {
+			sslMode = "require"
+		}
+		return fmt.Sprintf("jdbc:postgresql://%s:%s/%s?sslmode=%s", host, port, database, sslMode)
+	case "mysql":
+		sslMode := "DISABLED"
+		if tlsEnabled {
+			sslMode = "REQUIRED"
+		}
+		return fmt.Sprintf("jdbc:mysql://%s:%s/%s?sslMode=%s&allowPublicKeyRetrieval=true", host, port, database, sslMode)
+	case "sqlserver":
+		encrypt := "false"
+		if tlsEnabled {
+			encrypt = "true"
+		}
+		return fmt.Sprintf("jdbc:sqlserver://%s:%s;databaseName=%s;encrypt=%s;trustServerCertificate=true", host, port, database, encrypt)
+	case "oracle":
+		service := firstNonEmpty(project.ConnectionServiceName, project.ServiceName, database)
+		return fmt.Sprintf("jdbc:oracle:thin:@//%s:%s/%s", host, port, service)
+	default:
+		return ""
+	}
+}
+
+func projectBackupCard(width int) []string {
+	card := styleCard.Width(width)
+	title := mainTitleStyle(colorBgCard)
+	body := mainBodyStyle(colorBgCard)
+	muted := mainMutedStyle(colorBgCard)
+	lines := []string{
+		card.Render(""),
+		card.Render(mainBodyStyle(colorBgCard).Render("  ") + title.Render("Backup history")),
+		card.Render(""),
+	}
+	lines = append(lines, card.Render(body.Render("  ")+muted.Render("Status")+body.Render("  No backups yet.")))
+	lines = append(lines, card.Render(""))
+	return repairCardLines(lines)
+}
+
+func repairCardLines(lines []string) []string {
+	for i, line := range lines {
+		lines[i] = strings.ReplaceAll(line, reset, reset+ansiBg(colorBgCard))
+	}
+	return lines
+}
+
+func projectStatusLabel(project liveProject) string {
+	status := strings.TrimSpace(project.Status)
+	if status == "" {
+		return "Unknown"
+	}
+	return status
+}
+
 func dashboardProjectRow(project liveProject, width int, active bool) string {
 	rowBg := colorBgMain
 	rowStyle := styleMain
@@ -1213,6 +1477,116 @@ func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature dep
 	return lines
 }
 
+func databaseDeployFormCard(m model, width int) []string {
+	cardWidth := max(width-6, 42)
+	card := styleCard.Width(cardWidth)
+	title := mainTitleStyle(colorBgCard)
+	bodyStyle := mainBodyStyle(colorBgCard)
+	mutedStyle := mainMutedStyle(colorBgCard)
+	lines := []string{
+		cardContentLine(card, "", width),
+		cardContentLine(card, "  "+title.Render("Deploy Database")+bodyStyle.Render("  ")+mutedStyle.Render("single-instance"), width),
+		cardContentLine(card, "  "+mutedStyle.Render("Use arrows or j/k to move. Left/right changes choices."), width),
+		cardContentLine(card, "", width),
+	}
+	fields := []struct {
+		index int
+		label string
+		value string
+	}{
+		{0, "Project name", m.dbForm.projectName},
+		{1, "Engine", m.dbForm.engine().label},
+		{2, "Database name", m.dbForm.databaseName},
+		{3, "Username", m.dbForm.username},
+		{4, "Password", maskValue(m.dbForm.password)},
+		{5, "Version", m.dbForm.version()},
+		{6, "Size", m.dbForm.size()},
+	}
+	for index, field := range fields {
+		lines = append(lines, databaseDeployFieldBox(card, cardWidth, width, m, field.index, field.label, field.value)...)
+		if index == len(fields)-1 {
+			lines = append(lines, cardContentLine(card, "", width))
+		}
+	}
+	lines = append(lines, databaseDeploySubmitBox(card, cardWidth, width, m)...)
+	lines = append(lines, cardContentLine(card, "", width))
+	payload := fmt.Sprintf("Payload: %s / single-instance / %s / %s", m.dbForm.engine().id, m.dbForm.version(), m.dbForm.size())
+	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(payload, cardWidth-4)), width))
+	if m.message != "" {
+		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	return lines
+}
+
+func databaseDeployFieldBox(card lipgloss.Style, cardWidth, width int, m model, index int, label, value string) []string {
+	active := m.dbForm.focus == index
+	if value == "" {
+		value = "..."
+	}
+	rowBg := lipgloss.Color(colorBgCard)
+	border := lipgloss.Color(colorBorder)
+	labelStyle := mainMutedStyle(colorBgCard)
+	valueStyle := mainBodyStyle(colorBgCard)
+	prefixStyle := mainBodyStyle(colorBgCard)
+	prefix := "  "
+	if active {
+		border = lipgloss.Color(colorPrimary)
+		labelStyle = mainPrimaryStyle(colorBgCard)
+		valueStyle = mainTitleStyle(colorBgCard)
+		prefixStyle = mainPrimaryStyle(colorBgCard)
+		prefix = "> "
+	}
+	boxWidth := max(cardWidth-4, 24)
+	labelWidth := 16
+	valueWidth := max(boxWidth-labelWidth-8, 8)
+	content := prefixStyle.Render(prefix) +
+		labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		valueStyle.Render(truncatePlain(value, valueWidth))
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Render(content)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
+func databaseDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model) []string {
+	active := m.dbForm.focus == 7
+	rowBg := lipgloss.Color(colorBgCard)
+	border := lipgloss.Color(colorBorder)
+	labelStyle := mainBodyStyle(colorBgCard)
+	if active {
+		border = lipgloss.Color(colorPrimary)
+		labelStyle = mainPrimaryStyle(colorBgCard)
+	}
+	label := labelStyle.Render("Deploy")
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Padding(0, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Render(label)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
 func sideContentLine(content string, width int) string {
 	return styleSide.Render(content) + styleSide.Render(spaces(max(width-visibleLen(content), 0)))
 }
@@ -1247,7 +1621,7 @@ func itemIconGlyph(item navigationItem) string {
 	}
 	switch item.page {
 	case pageProjects:
-		return nfProject
+		return nfFolder
 	case pageDeployment:
 		return nfDeploy
 	case pageImageScanner:

@@ -75,6 +75,64 @@ func TestFetchLiveProjects(t *testing.T) {
 	}
 }
 
+func TestFetchLiveProjectsHydratesDatabaseConnectionDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/v1/profile/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{"userId": "user-1"})
+		case "/api/v1/projects/live":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"kind":                  "database",
+				"id":                    "orders",
+				"name":                  "Orders",
+				"status":                "DEPLOYED",
+				"createdAt":             "2026-05-25T01:00:00Z",
+				"updatedAt":             "2026-05-25T01:30:00Z",
+				"databaseDeploymentIds": []string{"db-1"},
+			}})
+		case "/api/v1/database-deployments/db-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":                   "db-1",
+				"projectName":          "orders",
+				"engine":               "postgresql",
+				"deploymentMode":       "single-instance",
+				"databaseName":         "ordersdb",
+				"username":             "orders_user",
+				"version":              "18",
+				"namespace":            "ns-orders",
+				"serviceHost":          "db-orders.db.autonomous-istad.com",
+				"servicePort":          float64(5432),
+				"requireSsl":           true,
+				"connectionTlsEnabled": true,
+				"status":               "DEPLOYED",
+			})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newProjectClient(server.URL)
+	client.client = server.Client()
+	projects, err := client.fetchLiveProjects(context.Background(), "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("projects = %#v", projects)
+	}
+	project := projects[0]
+	if project.ServiceHost != "db-orders.db.autonomous-istad.com" || project.ServicePort != 5432 {
+		t.Fatalf("connection details = %#v", project)
+	}
+	if project.DatabaseUsername != "orders_user" || !project.RequireSSL || !project.ConnectionTLSEnabled {
+		t.Fatalf("database details = %#v", project)
+	}
+}
+
 func TestFetchLiveProjectsStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

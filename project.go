@@ -24,9 +24,16 @@ type liveProject struct {
 	Version               string
 	ProjectName           string
 	DatabaseName          string
+	DatabaseUsername      string
 	Namespace             string
 	DeploymentCount       int
 	DatabaseDeploymentIDs []string
+	ServiceName           string
+	ConnectionServiceName string
+	ServiceHost           string
+	ServicePort           int
+	RequireSSL            bool
+	ConnectionTLSEnabled  bool
 	ArchitectureType      string
 	RepoURL               string
 	RepoFullName          string
@@ -57,18 +64,25 @@ type createDatabaseDeploymentInput struct {
 }
 
 type databaseDeploymentRecord struct {
-	ID            string
-	ReleaseName   string
-	Namespace     string
-	Engine        string
-	ProjectName   string
-	DatabaseName  string
-	Username      string
-	Version       string
-	StorageSize   string
-	Status        string
-	StatusMessage string
-	StatusLog     string
+	ID                    string
+	ReleaseName           string
+	Namespace             string
+	Engine                string
+	DeploymentMode        string
+	ProjectName           string
+	DatabaseName          string
+	Username              string
+	Version               string
+	StorageSize           string
+	ServiceName           string
+	ConnectionServiceName string
+	ServiceHost           string
+	ServicePort           int
+	RequireSSL            bool
+	ConnectionTLSEnabled  bool
+	Status                string
+	StatusMessage         string
+	StatusLog             string
 }
 
 type projectClient struct {
@@ -129,7 +143,42 @@ func (c projectClient) fetchLiveProjects(ctx context.Context, token string) ([]l
 			projects = append(projects, project)
 		}
 	}
+	projects = c.hydrateLiveProjectConnectionDetails(ctx, token, projects)
 	return projects, nil
+}
+
+func (c projectClient) hydrateLiveProjectConnectionDetails(ctx context.Context, token string, projects []liveProject) []liveProject {
+	for index := range projects {
+		project := projects[index]
+		if project.Kind != "database" || len(project.DatabaseDeploymentIDs) == 0 {
+			continue
+		}
+		deployment, err := c.fetchDatabaseDeployment(ctx, token, project.DatabaseDeploymentIDs[0])
+		if err != nil {
+			continue
+		}
+		projects[index] = mergeDatabaseDeploymentDetail(project, deployment)
+	}
+	return projects
+}
+
+func mergeDatabaseDeploymentDetail(project liveProject, deployment databaseDeploymentRecord) liveProject {
+	project.Engine = firstNonEmpty(deployment.Engine, project.Engine)
+	project.DeploymentMode = firstNonEmpty(deployment.DeploymentMode, project.DeploymentMode)
+	project.Version = firstNonEmpty(deployment.Version, project.Version)
+	project.ProjectName = firstNonEmpty(deployment.ProjectName, project.ProjectName)
+	project.DatabaseName = firstNonEmpty(deployment.DatabaseName, project.DatabaseName)
+	project.DatabaseUsername = firstNonEmpty(deployment.Username, project.DatabaseUsername)
+	project.Namespace = firstNonEmpty(deployment.Namespace, project.Namespace)
+	project.ServiceName = firstNonEmpty(deployment.ServiceName, project.ServiceName)
+	project.ConnectionServiceName = firstNonEmpty(deployment.ConnectionServiceName, project.ConnectionServiceName)
+	project.ServiceHost = firstNonEmpty(deployment.ServiceHost, project.ServiceHost)
+	if deployment.ServicePort > 0 {
+		project.ServicePort = deployment.ServicePort
+	}
+	project.RequireSSL = deployment.RequireSSL
+	project.ConnectionTLSEnabled = deployment.ConnectionTLSEnabled
+	return project
 }
 
 func (c projectClient) createDatabaseDeployment(
@@ -294,9 +343,16 @@ func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
 		Version:               readString(payload["version"]),
 		ProjectName:           readString(payload["projectName"]),
 		DatabaseName:          readString(payload["databaseName"]),
+		DatabaseUsername:      readString(payload["username"]),
 		Namespace:             readString(payload["namespace"]),
 		DeploymentCount:       readInt(payload["deploymentCount"]),
 		DatabaseDeploymentIDs: readStringSlice(payload["databaseDeploymentIds"]),
+		ServiceName:           readString(payload["serviceName"]),
+		ConnectionServiceName: readString(payload["connectionServiceName"]),
+		ServiceHost:           readString(payload["serviceHost"]),
+		ServicePort:           readInt(payload["servicePort"]),
+		RequireSSL:            readBool(payload["requireSsl"]),
+		ConnectionTLSEnabled:  readBool(payload["connectionTlsEnabled"]),
 		ArchitectureType:      readString(payload["architectureType"]),
 		RepoURL:               readString(payload["repoUrl"]),
 		RepoFullName:          readString(payload["repoFullName"]),
@@ -318,18 +374,25 @@ func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
 
 func normalizeDatabaseDeployment(payload map[string]any) databaseDeploymentRecord {
 	return databaseDeploymentRecord{
-		ID:            readString(payload["id"]),
-		ReleaseName:   readString(payload["releaseName"]),
-		Namespace:     readString(payload["namespace"]),
-		Engine:        readString(payload["engine"]),
-		ProjectName:   readString(payload["projectName"]),
-		DatabaseName:  readString(payload["databaseName"]),
-		Username:      readString(payload["username"]),
-		Version:       readString(payload["version"]),
-		StorageSize:   readString(payload["storageSize"]),
-		Status:        readString(payload["status"]),
-		StatusMessage: readString(payload["statusMessage"]),
-		StatusLog:     readString(payload["statusLog"]),
+		ID:                    readString(payload["id"]),
+		ReleaseName:           readString(payload["releaseName"]),
+		Namespace:             readString(payload["namespace"]),
+		Engine:                readString(payload["engine"]),
+		DeploymentMode:        readString(payload["deploymentMode"]),
+		ProjectName:           readString(payload["projectName"]),
+		DatabaseName:          readString(payload["databaseName"]),
+		Username:              readString(payload["username"]),
+		Version:               readString(payload["version"]),
+		StorageSize:           readString(payload["storageSize"]),
+		ServiceName:           readString(payload["serviceName"]),
+		ConnectionServiceName: readString(payload["connectionServiceName"]),
+		ServiceHost:           readString(payload["serviceHost"]),
+		ServicePort:           readInt(payload["servicePort"]),
+		RequireSSL:            readBool(payload["requireSsl"]),
+		ConnectionTLSEnabled:  readBool(payload["connectionTlsEnabled"]),
+		Status:                readString(payload["status"]),
+		StatusMessage:         readString(payload["statusMessage"]),
+		StatusLog:             readString(payload["statusLog"]),
 	}
 }
 

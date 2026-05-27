@@ -136,6 +136,24 @@ func TestProjectArrowSelectionAndFocus(t *testing.T) {
 	}
 }
 
+func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
+	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.projects = []liveProject{{Name: "mama", Kind: "database", Status: "DEPLOYED", Engine: "PostgreSQL"}}
+
+	next, _ := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if !m.projectDetailOpen {
+		t.Fatalf("expected project detail to open: %#v", m)
+	}
+
+	next, cmd := m.updateKey(keyMsg("esc"))
+	m = next.(model)
+	if cmd != nil || m.projectDetailOpen {
+		t.Fatalf("expected project detail to close, open=%v cmd=%v", m.projectDetailOpen, cmd)
+	}
+}
+
 func TestLogoutClearsSession(t *testing.T) {
 	m := initialModel(appConfig{
 		BackendBaseURL:   "http://backend",

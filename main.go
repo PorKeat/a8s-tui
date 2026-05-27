@@ -43,32 +43,33 @@ const (
 )
 
 type model struct {
-	config          appConfig
-	configErr       error
-	auth            authClient
-	projectsAPI     projectClient
-	spinner         spinner.Model
-	tokens          tokenSet
-	state           appState
-	width           int
-	height          int
-	cursor          int
-	launcherCursor  int
-	navCursor       int
-	deployCursor    int
-	page            appPage
-	focus           focusArea
-	filter          string
-	filtering       bool
-	projects        []liveProject
-	dbForm          databaseDeployForm
-	dbFormOpen      bool
-	deployLogOpen   bool
-	deployLog       databaseDeploymentRecord
-	deployLogOffset int
-	darkMode        bool
-	message         string
-	lastRefreshed   time.Time
+	config            appConfig
+	configErr         error
+	auth              authClient
+	projectsAPI       projectClient
+	spinner           spinner.Model
+	tokens            tokenSet
+	state             appState
+	width             int
+	height            int
+	cursor            int
+	launcherCursor    int
+	navCursor         int
+	deployCursor      int
+	page              appPage
+	focus             focusArea
+	filter            string
+	filtering         bool
+	projects          []liveProject
+	projectDetailOpen bool
+	dbForm            databaseDeployForm
+	dbFormOpen        bool
+	deployLogOpen     bool
+	deployLog         databaseDeploymentRecord
+	deployLogOffset   int
+	darkMode          bool
+	message           string
+	lastRefreshed     time.Time
 }
 
 type loginResultMsg struct {
@@ -272,6 +273,9 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.dbFormOpen {
 		return m.updateDatabaseDeployForm(msg)
 	}
+	if m.projectDetailOpen {
+		return m.updateProjectDetail(msg)
+	}
 
 	key := msg.String()
 	code := msg.Key().Code
@@ -312,6 +316,9 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case isEnter || key == "l":
 		if m.state == stateReady && isEnter && m.focus == focusSidebar {
 			return m.activateNavigationItem()
+		}
+		if m.state == stateReady && isEnter && m.page == pageProjects {
+			return m.openProjectDetail()
 		}
 		if m.state == stateReady && isEnter && m.page == pageDeployment {
 			return m.activateDeploymentFeature()
@@ -543,6 +550,19 @@ func (m model) updateDeploymentLog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateProjectDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	switch {
+	case key == "ctrl+c" || key == "q":
+		return m, tea.Quit
+	case key == "esc" || key == "b" || code == tea.KeyEscape:
+		m.projectDetailOpen = false
+		m.message = "Back to projects"
+	}
+	return m, nil
+}
+
 func (f databaseDeployForm) engine() databaseEngineOption {
 	return databaseEngineOptions[clamp(f.engineIndex, 0, len(databaseEngineOptions)-1)]
 }
@@ -630,6 +650,16 @@ func (m model) activateDeploymentFeature() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) openProjectDetail() (tea.Model, tea.Cmd) {
+	if _, ok := m.selectedProject(); !ok {
+		m.message = "No project selected"
+		return m, nil
+	}
+	m.projectDetailOpen = true
+	m.focus = focusList
+	return m, nil
+}
+
 func (m model) openDatabaseDeployForm() model {
 	m.navCursor = m.navigationIndexByPage(pageDeployment)
 	m.dbFormOpen = true
@@ -640,6 +670,7 @@ func (m model) openDatabaseDeployForm() model {
 
 func (m *model) setPage(page appPage) {
 	m.page = page
+	m.projectDetailOpen = false
 	m.navCursor = m.navigationIndexByPage(page)
 	if page == pageDeployment {
 		m.deployCursor = 0
@@ -668,6 +699,7 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	tokens := m.tokens
 	m.tokens = tokenSet{}
 	m.projects = nil
+	m.projectDetailOpen = false
 	m.dbFormOpen = false
 	m.deployLogOpen = false
 	m.deployLog = databaseDeploymentRecord{}
