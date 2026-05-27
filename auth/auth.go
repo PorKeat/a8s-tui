@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"context"
@@ -15,11 +15,12 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"a8s-tui/config"
 )
 
 const tokenRefreshSkew = 30 * time.Second
 
-type tokenSet struct {
+type TokenSet struct {
 	AccessToken  string
 	RefreshToken string
 	IDToken      string
@@ -27,11 +28,11 @@ type tokenSet struct {
 	ExpiresAt    time.Time
 }
 
-func (t tokenSet) canRefresh() bool {
+func (t TokenSet) CanRefresh() bool {
 	return strings.TrimSpace(t.RefreshToken) != ""
 }
 
-func (t tokenSet) expiresSoon(now time.Time) bool {
+func (t TokenSet) ExpiresSoon(now time.Time) bool {
 	if t.ExpiresAt.IsZero() {
 		return false
 	}
@@ -48,44 +49,44 @@ type tokenResponse struct {
 	ErrorDesc    string `json:"error_description"`
 }
 
-type authClient struct {
-	config  appConfig
+type AuthClient struct {
+	config  config.AppConfig
 	client  *http.Client
-	openURL func(string) error
+	OpenURL func(string) error
 }
 
-func newAuthClient(config appConfig) authClient {
-	return authClient{
+func NewAuthClient(config config.AppConfig) AuthClient {
+	return AuthClient{
 		config: config,
 		client: &http.Client{Timeout: 20 * time.Second},
-		openURL: func(target string) error {
+		OpenURL: func(target string) error {
 			return openBrowser(target)
 		},
 	}
 }
 
-func (a authClient) login(ctx context.Context) (tokenSet, error) {
+func (a AuthClient) Login(ctx context.Context) (TokenSet, error) {
 	redirectURL, err := url.Parse(a.config.KeycloakRedirectURL)
 	if err != nil {
-		return tokenSet{}, fmt.Errorf("invalid KEYCLOAK_REDIRECT_URL: %w", err)
+		return TokenSet{}, fmt.Errorf("invalid KEYCLOAK_REDIRECT_URL: %w", err)
 	}
 	if redirectURL.Scheme != "http" || redirectURL.Host == "" || redirectURL.Path == "" {
-		return tokenSet{}, errors.New("KEYCLOAK_REDIRECT_URL must be an http localhost callback URL")
+		return TokenSet{}, errors.New("KEYCLOAK_REDIRECT_URL must be an http localhost callback URL")
 	}
 
 	state, err := randomURLToken(24)
 	if err != nil {
-		return tokenSet{}, err
+		return TokenSet{}, err
 	}
 	verifier, err := randomURLToken(48)
 	if err != nil {
-		return tokenSet{}, err
+		return TokenSet{}, err
 	}
 	challenge := codeChallenge(verifier)
 
 	listener, err := net.Listen("tcp", redirectURL.Host)
 	if err != nil {
-		return tokenSet{}, fmt.Errorf("start callback listener on %s: %w", redirectURL.Host, err)
+		return TokenSet{}, fmt.Errorf("start callback listener on %s: %w", redirectURL.Host, err)
 	}
 	defer listener.Close()
 
@@ -102,27 +103,27 @@ func (a authClient) login(ctx context.Context) (tokenSet, error) {
 
 	loginURL, err := a.buildLoginURL(state, challenge)
 	if err != nil {
-		return tokenSet{}, err
+		return TokenSet{}, err
 	}
-	if err := a.openURL(loginURL); err != nil {
-		return tokenSet{}, fmt.Errorf("open browser for Keycloak login: %w", err)
+	if err := a.OpenURL(loginURL); err != nil {
+		return TokenSet{}, fmt.Errorf("open browser for Keycloak login: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
-		return tokenSet{}, ctx.Err()
+		return TokenSet{}, ctx.Err()
 	case received := <-result:
 		if received.err != nil {
-			return tokenSet{}, received.err
+			return TokenSet{}, received.err
 		}
 		return a.exchangeCode(ctx, received.code, verifier)
 	case <-time.After(5 * time.Minute):
-		return tokenSet{}, errors.New("login timed out waiting for Keycloak callback")
+		return TokenSet{}, errors.New("login timed out waiting for Keycloak callback")
 	}
 }
 
-func (a authClient) buildLoginURL(state, challenge string) (string, error) {
-	authURL, err := url.Parse(a.config.authURL())
+func (a AuthClient) buildLoginURL(state, challenge string) (string, error) {
+	authURL, err := url.Parse(a.config.AuthURL())
 	if err != nil {
 		return "", err
 	}
@@ -138,7 +139,7 @@ func (a authClient) buildLoginURL(state, challenge string) (string, error) {
 	return authURL.String(), nil
 }
 
-func (a authClient) exchangeCode(ctx context.Context, code, verifier string) (tokenSet, error) {
+func (a AuthClient) exchangeCode(ctx context.Context, code, verifier string) (TokenSet, error) {
 	values := url.Values{}
 	values.Set("grant_type", "authorization_code")
 	values.Set("client_id", a.config.KeycloakClientID)
@@ -149,9 +150,9 @@ func (a authClient) exchangeCode(ctx context.Context, code, verifier string) (to
 	return a.tokenRequest(ctx, values)
 }
 
-func (a authClient) refresh(ctx context.Context, current tokenSet) (tokenSet, error) {
-	if !current.canRefresh() {
-		return tokenSet{}, errors.New("no refresh token is available")
+func (a AuthClient) Refresh(ctx context.Context, current TokenSet) (TokenSet, error) {
+	if !current.CanRefresh() {
+		return TokenSet{}, errors.New("no refresh token is available")
 	}
 	values := url.Values{}
 	values.Set("grant_type", "refresh_token")
@@ -161,16 +162,16 @@ func (a authClient) refresh(ctx context.Context, current tokenSet) (tokenSet, er
 	return a.tokenRequest(ctx, values)
 }
 
-func (a authClient) logout(current tokenSet) error {
+func (a AuthClient) Logout(current TokenSet) error {
 	logoutURL, err := a.buildLogoutURL(current)
 	if err != nil {
 		return err
 	}
-	return a.openURL(logoutURL)
+	return a.OpenURL(logoutURL)
 }
 
-func (a authClient) buildLogoutURL(current tokenSet) (string, error) {
-	logoutURL, err := url.Parse(a.config.keycloakIssuer() + "/protocol/openid-connect/logout")
+func (a AuthClient) buildLogoutURL(current TokenSet) (string, error) {
+	logoutURL, err := url.Parse(a.config.KeycloakIssuer() + "/protocol/openid-connect/logout")
 	if err != nil {
 		return "", err
 	}
@@ -183,28 +184,28 @@ func (a authClient) buildLogoutURL(current tokenSet) (string, error) {
 	return logoutURL.String(), nil
 }
 
-func (a authClient) tokenRequest(ctx context.Context, values url.Values) (tokenSet, error) {
+func (a AuthClient) tokenRequest(ctx context.Context, values url.Values) (TokenSet, error) {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		a.config.tokenURL(),
+		a.config.TokenURL(),
 		strings.NewReader(values.Encode()),
 	)
 	if err != nil {
-		return tokenSet{}, err
+		return TokenSet{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	res, err := a.client.Do(req)
 	if err != nil {
-		return tokenSet{}, err
+		return TokenSet{}, err
 	}
 	defer res.Body.Close()
 
 	var payload tokenResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return tokenSet{}, fmt.Errorf("decode Keycloak token response: %w", err)
+		return TokenSet{}, fmt.Errorf("decode Keycloak token response: %w", err)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		message := strings.TrimSpace(payload.ErrorDesc)
@@ -214,10 +215,10 @@ func (a authClient) tokenRequest(ctx context.Context, values url.Values) (tokenS
 		if message == "" {
 			message = fmt.Sprintf("Keycloak token request failed with HTTP %d", res.StatusCode)
 		}
-		return tokenSet{}, errors.New(message)
+		return TokenSet{}, errors.New(message)
 	}
 	if strings.TrimSpace(payload.AccessToken) == "" {
-		return tokenSet{}, errors.New("Keycloak token response did not include an access token")
+		return TokenSet{}, errors.New("Keycloak token response did not include an access token")
 	}
 
 	tokenType := strings.TrimSpace(payload.TokenType)
@@ -229,7 +230,7 @@ func (a authClient) tokenRequest(ctx context.Context, values url.Values) (tokenS
 		expiresAt = time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second)
 	}
 
-	return tokenSet{
+	return TokenSet{
 		AccessToken:  payload.AccessToken,
 		RefreshToken: payload.RefreshToken,
 		IDToken:      payload.IDToken,

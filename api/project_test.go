@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -27,11 +27,11 @@ func TestNormalizeLiveProject(t *testing.T) {
 }
 
 func TestFilteredProjects(t *testing.T) {
-	projects := []liveProject{
+	projects := []LiveProject{
 		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
 		{Name: "Data", Kind: "database", Engine: "postgres"},
 	}
-	got := filteredProjects(projects, "post")
+	got := FilteredProjects(projects, "post")
 	if len(got) != 1 || got[0].Name != "Data" {
 		t.Fatalf("filtered projects = %#v", got)
 	}
@@ -64,9 +64,9 @@ func TestFetchLiveProjects(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	projects, err := client.fetchLiveProjects(context.Background(), "access")
+	projects, _, err := client.FetchLiveProjects(context.Background(), "access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,9 +115,9 @@ func TestFetchLiveProjectsHydratesDatabaseConnectionDetails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	projects, err := client.fetchLiveProjects(context.Background(), "access")
+	projects, _, err := client.FetchLiveProjects(context.Background(), "access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,10 +140,10 @@ func TestFetchLiveProjectsStatusError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	_, err := client.fetchLiveProjects(context.Background(), "bad")
-	if !isUnauthorized(err) {
+	_, _, err := client.FetchLiveProjects(context.Background(), "bad")
+	if !IsUnauthorized(err) {
 		t.Fatalf("expected unauthorized error, got %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestCreateDatabaseDeployment(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer access" {
 			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
 		}
-		var payload createDatabaseDeploymentInput
+		var payload CreateDatabaseDeploymentInput
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
@@ -177,9 +177,9 @@ func TestCreateDatabaseDeployment(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	deployment, err := client.createDatabaseDeployment(context.Background(), "access", createDatabaseDeploymentInput{
+	deployment, err := client.CreateDatabaseDeployment(context.Background(), "access", CreateDatabaseDeploymentInput{
 		ProjectName:    "orders",
 		Engine:         "postgresql",
 		DeploymentMode: "single-instance",
@@ -218,9 +218,9 @@ func TestFetchDatabaseDeployment(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	deployment, err := client.fetchDatabaseDeployment(context.Background(), "access", "db-1")
+	deployment, err := client.FetchDatabaseDeployment(context.Background(), "access", "db-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestFetchDatabaseDeployment(t *testing.T) {
 }
 
 func TestParseDeploymentLogLines(t *testing.T) {
-	lines := parseDeploymentLogLines("queued\r\ncreating namespace\n\ncreating namespace\nready")
+	lines := ParseDeploymentLogLines("queued\r\ncreating namespace\n\ncreating namespace\nready")
 	want := []string{"queued", "creating namespace", "ready"}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %#v", lines)
@@ -242,23 +242,6 @@ func TestParseDeploymentLogLines(t *testing.T) {
 	}
 }
 
-func TestDatabaseDeployFormInputValidation(t *testing.T) {
-	form := newDatabaseDeployForm()
-	if _, err := form.input(); err == nil {
-		t.Fatal("expected required field error")
-	}
-	form.projectName = "orders"
-	form.databaseName = "ordersdb"
-	form.username = "orders_user"
-	form.password = "secret"
-	input, err := form.input()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if input.Engine != "postgresql" || input.Version != "18" || input.SizeProfile != "small" {
-		t.Fatalf("input = %#v", input)
-	}
-}
 
 func TestFetchBackendUserID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,9 +252,9 @@ func TestFetchBackendUserID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newProjectClient(server.URL)
+	client := NewProjectClient(server.URL)
 	client.client = server.Client()
-	userID, err := client.fetchBackendUserID(context.Background(), "access")
+	userID, _, err := client.fetchBackendUserID(context.Background(), "access")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,15 +1,18 @@
-package main
+package ui
 
 import (
+	"a8s-tui/api"
+	"a8s-tui/auth"
+	"a8s-tui/config"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
 
 func TestModelMoveAndFilter(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
-	m.projects = []liveProject{
+	m.projects = []api.LiveProject{
 		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
 		{Name: "Orders", Kind: "database", Status: "RUNNING", Engine: "postgres"},
 	}
@@ -35,8 +38,37 @@ func TestModelMoveAndFilter(t *testing.T) {
 	}
 }
 
+func TestSlashStartsProjectFilterFromAnyDashboardPage(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageDeployment
+	m.navCursor = m.navigationIndexByPage(pageDeployment)
+	m.projects = []api.LiveProject{
+		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
+		{Name: "Orders", Kind: "database", Status: "RUNNING", Engine: "postgres"},
+	}
+
+	next, _ := m.updateKey(keyMsg("/"))
+	m = next.(model)
+	if m.page != pageProjects || !m.filtering {
+		t.Fatalf("expected project filtering, page=%d filtering=%v", m.page, m.filtering)
+	}
+
+	next, _ = m.updateKey(keyMsg("o"))
+	m = next.(model)
+	next, _ = m.updateKey(keyMsg("r"))
+	m = next.(model)
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+
+	visible := m.visibleProjects()
+	if len(visible) != 1 || visible[0].Name != "Orders" {
+		t.Fatalf("visible projects = %#v", visible)
+	}
+}
+
 func TestTabCyclesFocus(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	start := m.focus
 	next, _ := m.updateKey(specialKeyMsg(tea.KeyTab))
 	m = next.(model)
@@ -46,7 +78,7 @@ func TestTabCyclesFocus(t *testing.T) {
 }
 
 func TestLauncherArrowSelection(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	items := m.launcherItems()
 	if len(items) != 2 || items[0].action != "login" || items[1].action != "quit" {
 		t.Fatalf("launcher items = %#v", items)
@@ -65,7 +97,7 @@ func TestLauncherArrowSelection(t *testing.T) {
 }
 
 func TestLoggedInNavigationSections(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
 	m.focus = focusSidebar
 
@@ -110,9 +142,9 @@ func TestLoggedInNavigationSections(t *testing.T) {
 }
 
 func TestProjectArrowSelectionAndFocus(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
-	m.projects = []liveProject{
+	m.projects = []api.LiveProject{
 		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
 		{Name: "Orders", Kind: "database", Status: "RUNNING"},
 	}
@@ -137,9 +169,9 @@ func TestProjectArrowSelectionAndFocus(t *testing.T) {
 }
 
 func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
-	m.projects = []liveProject{{Name: "mama", Kind: "database", Status: "DEPLOYED", Engine: "PostgreSQL"}}
+	m.projects = []api.LiveProject{{Name: "mama", Kind: "database", Status: "DEPLOYED", Engine: "PostgreSQL"}}
 
 	next, _ := m.updateKey(keyMsg("enter"))
 	m = next.(model)
@@ -155,16 +187,16 @@ func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
 }
 
 func TestLogoutClearsSession(t *testing.T) {
-	m := initialModel(appConfig{
+	m := initialModel(config.AppConfig{
 		BackendBaseURL:   "http://backend",
 		KeycloakURL:      "https://keycloak.example.com",
 		KeycloakRealm:    "a8s",
 		KeycloakClientID: "a8s-tui",
 	}, nil)
-	m.auth.openURL = func(string) error { return nil }
+	m.auth.OpenURL = func(string) error { return nil }
 	m.state = stateReady
-	m.tokens = tokenSet{AccessToken: "access", IDToken: "id-token"}
-	m.projects = []liveProject{{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"}}
+	m.tokens = auth.TokenSet{AccessToken: "access", IDToken: "id-token"}
+	m.projects = []api.LiveProject{{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"}}
 	m.filter = "front"
 
 	next, cmd := m.updateKey(keyMsg("o"))
@@ -183,11 +215,11 @@ func TestLogoutClearsSession(t *testing.T) {
 }
 
 func TestDatabaseDeployResultOpensLogView(t *testing.T) {
-	m := initialModel(appConfig{BackendBaseURL: "http://backend"}, nil)
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
 	next, cmd := m.Update(databaseDeployResultMsg{
-		tokens: tokenSet{AccessToken: "access"},
-		deployment: databaseDeploymentRecord{
+		tokens: auth.TokenSet{AccessToken: "access"},
+		deployment: api.DatabaseDeploymentRecord{
 			ID:          "db-1",
 			ProjectName: "orders",
 			Status:      "DEPLOYED",
@@ -212,4 +244,21 @@ func keyMsg(text string) tea.KeyPressMsg {
 
 func specialKeyMsg(code rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Code: code})
+}
+func TestDatabaseDeployFormInputValidation(t *testing.T) {
+	form := newDatabaseDeployForm()
+	if _, err := form.input(); err == nil {
+		t.Fatal("expected required field error")
+	}
+	form.projectName = "orders"
+	form.databaseName = "ordersdb"
+	form.username = "orders_user"
+	form.password = "secret"
+	input, err := form.input()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Engine != "postgresql" || input.Version != "18" || input.SizeProfile != "small" {
+		t.Fatalf("input = %#v", input)
+	}
 }

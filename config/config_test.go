@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -98,7 +98,7 @@ func TestLoadConfigUsesOnlyTUIEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig()
+	cfg, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}

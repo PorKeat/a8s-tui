@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"bufio"
@@ -18,7 +18,7 @@ var backendURLKeys = []string{
 	"NEXT_PUBLIC_API_URL",
 }
 
-type appConfig struct {
+type AppConfig struct {
 	BackendBaseURL       string
 	KeycloakURL          string
 	KeycloakRealm        string
@@ -27,7 +27,7 @@ type appConfig struct {
 	KeycloakRedirectURL  string
 }
 
-func loadConfig() (appConfig, error) {
+func LoadConfig() (AppConfig, error) {
 	values := map[string]string{}
 
 	for _, path := range envCandidates("tui/.env") {
@@ -41,7 +41,7 @@ func loadConfig() (appConfig, error) {
 		}
 	}
 
-	cfg := appConfig{
+	cfg := AppConfig{
 		BackendBaseURL:       resolveBackendBaseURL(values),
 		KeycloakURL:          trimTrailingSlash(values["KEYCLOAK_URL"]),
 		KeycloakRealm:        strings.TrimSpace(values["KEYCLOAK_REALM"]),
@@ -173,14 +173,14 @@ func trimTrailingSlash(value string) string {
 	return value
 }
 
-func (c appConfig) keycloakIssuer() string {
+func (c AppConfig) KeycloakIssuer() string {
 	return c.KeycloakURL + "/realms/" + strings.Trim(c.KeycloakRealm, "/")
 }
 
-func (c appConfig) authURL() string {
-	return c.keycloakIssuer() + "/protocol/openid-connect/auth"
+func (c AppConfig) AuthURL() string {
+	return c.KeycloakIssuer() + "/protocol/openid-connect/auth"
 }
 
-func (c appConfig) tokenURL() string {
-	return c.keycloakIssuer() + "/protocol/openid-connect/token"
+func (c AppConfig) TokenURL() string {
+	return c.KeycloakIssuer() + "/protocol/openid-connect/token"
 }

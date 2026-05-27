@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-type liveProject struct {
+type LiveProject struct {
 	Kind                  string
 	ID                    string
 	Name                  string
@@ -52,7 +52,7 @@ type liveProject struct {
 	HealthStatus          string
 }
 
-type createDatabaseDeploymentInput struct {
+type CreateDatabaseDeploymentInput struct {
 	ProjectName    string `json:"projectName"`
 	Engine         string `json:"engine"`
 	DeploymentMode string `json:"deploymentMode"`
@@ -63,7 +63,7 @@ type createDatabaseDeploymentInput struct {
 	SizeProfile    string `json:"sizeProfile"`
 }
 
-type databaseDeploymentRecord struct {
+type DatabaseDeploymentRecord struct {
 	ID                    string
 	ReleaseName           string
 	Namespace             string
@@ -85,37 +85,37 @@ type databaseDeploymentRecord struct {
 	StatusLog             string
 }
 
-type projectClient struct {
+type ProjectClient struct {
 	baseURL string
 	client  *http.Client
 }
 
-func newProjectClient(baseURL string) projectClient {
-	return projectClient{
+func NewProjectClient(baseURL string) ProjectClient {
+	return ProjectClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
-func (c projectClient) fetchLiveProjects(ctx context.Context, token string) ([]liveProject, error) {
-	backendUserID, err := c.fetchBackendUserID(ctx, token)
+func (c ProjectClient) FetchLiveProjects(ctx context.Context, token string) ([]LiveProject, string, error) {
+	backendUserID, userName, err := c.fetchBackendUserID(ctx, token)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/projects/live")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	projectsURL, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	query := projectsURL.Query()
 	query.Set("userId", backendUserID)
 	projectsURL.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.URL = projectsURL
 	req.Header.Set("Accept", "application/json")
@@ -123,20 +123,20 @@ func (c projectClient) fetchLiveProjects(ctx context.Context, token string) ([]l
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+		return nil, "", httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
 	}
 
 	var raw []map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("decode live projects response: %w", err)
+		return nil, "", fmt.Errorf("decode live projects response: %w", err)
 	}
 
-	projects := make([]liveProject, 0, len(raw))
+	projects := make([]LiveProject, 0, len(raw))
 	for _, item := range raw {
 		project, ok := normalizeLiveProject(item)
 		if ok {
@@ -144,16 +144,16 @@ func (c projectClient) fetchLiveProjects(ctx context.Context, token string) ([]l
 		}
 	}
 	projects = c.hydrateLiveProjectConnectionDetails(ctx, token, projects)
-	return projects, nil
+	return projects, userName, nil
 }
 
-func (c projectClient) hydrateLiveProjectConnectionDetails(ctx context.Context, token string, projects []liveProject) []liveProject {
+func (c ProjectClient) hydrateLiveProjectConnectionDetails(ctx context.Context, token string, projects []LiveProject) []LiveProject {
 	for index := range projects {
 		project := projects[index]
 		if project.Kind != "database" || len(project.DatabaseDeploymentIDs) == 0 {
 			continue
 		}
-		deployment, err := c.fetchDatabaseDeployment(ctx, token, project.DatabaseDeploymentIDs[0])
+		deployment, err := c.FetchDatabaseDeployment(ctx, token, project.DatabaseDeploymentIDs[0])
 		if err != nil {
 			continue
 		}
@@ -162,7 +162,7 @@ func (c projectClient) hydrateLiveProjectConnectionDetails(ctx context.Context, 
 	return projects
 }
 
-func mergeDatabaseDeploymentDetail(project liveProject, deployment databaseDeploymentRecord) liveProject {
+func mergeDatabaseDeploymentDetail(project LiveProject, deployment DatabaseDeploymentRecord) LiveProject {
 	project.Engine = firstNonEmpty(deployment.Engine, project.Engine)
 	project.DeploymentMode = firstNonEmpty(deployment.DeploymentMode, project.DeploymentMode)
 	project.Version = firstNonEmpty(deployment.Version, project.Version)
@@ -181,22 +181,22 @@ func mergeDatabaseDeploymentDetail(project liveProject, deployment databaseDeplo
 	return project
 }
 
-func (c projectClient) createDatabaseDeployment(
+func (c ProjectClient) CreateDatabaseDeployment(
 	ctx context.Context,
 	token string,
-	input createDatabaseDeploymentInput,
-) (databaseDeploymentRecord, error) {
+	input CreateDatabaseDeploymentInput,
+) (DatabaseDeploymentRecord, error) {
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/database-deployments")
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -204,84 +204,95 @@ func (c projectClient) createDatabaseDeployment(
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return databaseDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+		return DatabaseDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return databaseDeploymentRecord{}, fmt.Errorf("decode database deployment response: %w", err)
+		return DatabaseDeploymentRecord{}, fmt.Errorf("decode database deployment response: %w", err)
 	}
 	return normalizeDatabaseDeployment(payload), nil
 }
 
-func (c projectClient) fetchDatabaseDeployment(ctx context.Context, token, deploymentID string) (databaseDeploymentRecord, error) {
+func (c ProjectClient) FetchDatabaseDeployment(ctx context.Context, token, deploymentID string) (DatabaseDeploymentRecord, error) {
 	if strings.TrimSpace(deploymentID) == "" {
-		return databaseDeploymentRecord{}, errors.New("database deployment id is required")
+		return DatabaseDeploymentRecord{}, errors.New("database deployment id is required")
 	}
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/database-deployments", deploymentID)
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return databaseDeploymentRecord{}, err
+		return DatabaseDeploymentRecord{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return databaseDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+		return DatabaseDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return databaseDeploymentRecord{}, fmt.Errorf("decode database deployment detail response: %w", err)
+		return DatabaseDeploymentRecord{}, fmt.Errorf("decode database deployment detail response: %w", err)
 	}
 	return normalizeDatabaseDeployment(payload), nil
 }
 
-func (c projectClient) fetchBackendUserID(ctx context.Context, token string) (string, error) {
+func (c ProjectClient) fetchBackendUserID(ctx context.Context, token string) (string, string, error) {
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/profile/me")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+		return "", "", httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
 	}
 
 	var payload map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("decode profile response: %w", err)
+		return "", "", fmt.Errorf("decode profile response: %w", err)
 	}
 	userID := readString(payload["userId"])
 	if userID == "" {
-		return "", errors.New("backend profile response did not include userId")
+		return "", "", errors.New("backend profile response did not include userId")
 	}
-	return userID, nil
+
+	var userName string
+	if personal, ok := payload["personal"].(map[string]any); ok {
+		userName = readString(personal["displayName"])
+		if userName == "" {
+			firstName := readString(personal["firstName"])
+			lastName := readString(personal["lastName"])
+			userName = strings.TrimSpace(firstName + " " + lastName)
+		}
+	}
+	
+	return userID, userName, nil
 }
 
 type httpStatusError struct {
@@ -296,7 +307,7 @@ func (e httpStatusError) Error() string {
 	return fmt.Sprintf("backend request failed with HTTP %d", e.status)
 }
 
-func isUnauthorized(err error) bool {
+func IsUnauthorized(err error) bool {
 	var statusErr httpStatusError
 	return errors.As(err, &statusErr) && statusErr.status == http.StatusUnauthorized
 }
@@ -314,7 +325,7 @@ func decodeErrorMessage(res *http.Response) string {
 	return ""
 }
 
-func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
+func normalizeLiveProject(payload map[string]any) (LiveProject, bool) {
 	kind := strings.ToLower(readString(payload["kind"]))
 	id := readString(payload["id"])
 	name := readString(payload["name"])
@@ -322,7 +333,7 @@ func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
 	createdAt := readTimestamp(payload["createdAt"])
 	updatedAt := readTimestamp(payload["updatedAt"])
 	if !validKind(kind) || id == "" || name == "" || status == "" {
-		return liveProject{}, false
+		return LiveProject{}, false
 	}
 	if createdAt == "" {
 		createdAt = updatedAt
@@ -331,7 +342,7 @@ func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
 		updatedAt = createdAt
 	}
 
-	return liveProject{
+	return LiveProject{
 		Kind:                  kind,
 		ID:                    id,
 		Name:                  name,
@@ -372,8 +383,8 @@ func normalizeLiveProject(payload map[string]any) (liveProject, bool) {
 	}, true
 }
 
-func normalizeDatabaseDeployment(payload map[string]any) databaseDeploymentRecord {
-	return databaseDeploymentRecord{
+func normalizeDatabaseDeployment(payload map[string]any) DatabaseDeploymentRecord {
+	return DatabaseDeploymentRecord{
 		ID:                    readString(payload["id"]),
 		ReleaseName:           readString(payload["releaseName"]),
 		Namespace:             readString(payload["namespace"]),
@@ -396,7 +407,7 @@ func normalizeDatabaseDeployment(payload map[string]any) databaseDeploymentRecor
 	}
 }
 
-func parseDeploymentLogLines(statusLog string) []string {
+func ParseDeploymentLogLines(statusLog string) []string {
 	parts := strings.Split(strings.ReplaceAll(statusLog, "\r\n", "\n"), "\n")
 	lines := make([]string, 0, len(parts))
 	seen := map[string]bool{}
@@ -411,7 +422,7 @@ func parseDeploymentLogLines(statusLog string) []string {
 	return lines
 }
 
-func databaseDeploymentTerminal(status string) bool {
+func DatabaseDeploymentTerminal(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "DEPLOYED", "READY", "RUNNING", "SUCCESS", "SUCCEEDED", "FAILED", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
 		return true
@@ -420,7 +431,7 @@ func databaseDeploymentTerminal(status string) bool {
 	}
 }
 
-func databaseDeploymentFailed(status string) bool {
+func DatabaseDeploymentFailed(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "FAILED", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
 		return true
@@ -528,7 +539,7 @@ func readStringSlice(value any) []string {
 	return out
 }
 
-func projectMatchesFilter(project liveProject, filter string) bool {
+func ProjectMatchesFilter(project LiveProject, filter string) bool {
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	if filter == "" {
 		return true
@@ -549,12 +560,21 @@ func projectMatchesFilter(project liveProject, filter string) bool {
 	return strings.Contains(haystack, filter)
 }
 
-func filteredProjects(projects []liveProject, filter string) []liveProject {
-	out := make([]liveProject, 0, len(projects))
+func FilteredProjects(projects []LiveProject, filter string) []LiveProject {
+	out := make([]LiveProject, 0, len(projects))
 	for _, project := range projects {
-		if projectMatchesFilter(project, filter) {
+		if ProjectMatchesFilter(project, filter) {
 			out = append(out, project)
 		}
 	}
 	return out
+}
+
+func firstNonEmpty(strings ...string) string {
+	for _, s := range strings {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

@@ -1,10 +1,11 @@
-package main
+package auth
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"a8s-tui/config"
 	"net/url"
 	"strings"
 	"testing"
@@ -22,8 +23,8 @@ func TestCodeChallenge(t *testing.T) {
 }
 
 func TestBuildLoginURL(t *testing.T) {
-	client := authClient{
-		config: appConfig{
+	client := AuthClient{
+		config: config.AppConfig{
 			KeycloakURL:         "https://keycloak.example.com",
 			KeycloakRealm:       "a8s",
 			KeycloakClientID:    "a8s-tui",
@@ -59,15 +60,15 @@ func TestBuildLoginURL(t *testing.T) {
 }
 
 func TestBuildLogoutURL(t *testing.T) {
-	client := authClient{
-		config: appConfig{
+	client := AuthClient{
+		config: config.AppConfig{
 			KeycloakURL:      "https://keycloak.example.com",
 			KeycloakRealm:    "a8s",
 			KeycloakClientID: "a8s-tui",
 		},
 	}
 
-	rawURL, err := client.buildLogoutURL(tokenSet{IDToken: "id-token"})
+	rawURL, err := client.buildLogoutURL(TokenSet{IDToken: "id-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +145,8 @@ func TestTokenRequestParsesToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := authClient{
-		config: appConfig{
+	client := AuthClient{
+		config: config.AppConfig{
 			KeycloakURL:          server.URL,
 			KeycloakRealm:        "a8s",
 			KeycloakClientID:     "client",
