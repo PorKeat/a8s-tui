@@ -24,24 +24,57 @@ func (m model) renderDashboardDeployment(width, height int) []string {
 
 func (m model) renderDashboardDatabaseDeployForm(width, height int) []string {
 	lines := make([]string, 0, height)
-	lines = append(lines, dashboardHeader("Single database", "Create a single-instance database deployment.", width)...)
-	lines = append(lines, databaseDeployFormCard(m, width)...)
+	header := dashboardHeader("Single database", "Create a single-instance database deployment.", width)
+	lines = append(lines, header...)
+	cardLines := databaseDeployFormCard(m, width)
+	viewportHeight := max(height-len(lines), 1)
+	cardLines = scrollDatabaseFormLines(cardLines, m.dbForm.focus, viewportHeight)
+	lines = append(lines, cardLines...)
 	return fillStyled(lines, bgDark, width, height)
+}
+
+func scrollDatabaseFormLines(lines []string, focus int, viewportHeight int) []string {
+	if len(lines) <= viewportHeight {
+		return lines
+	}
+	focusLine := databaseFormFocusLine(focus)
+	maxOffset := max(len(lines)-viewportHeight, 0)
+	offset := clamp(focusLine-viewportHeight/2, 0, maxOffset)
+	return lines[offset:min(offset+viewportHeight, len(lines))]
+}
+
+func databaseFormFocusLine(focus int) int {
+	if focus < 0 {
+		return 0
+	}
+	if focus <= 6 {
+		return 5 + focus*3
+	}
+	return 27
 }
 
 func deploymentFeatureCard(width int, activeIndex int) []string {
 	cardWidth := max(width-6, 30)
 	card := styleCard.Width(cardWidth)
 	title := mainTitleStyle(colorBgCard)
+	mutedStyle := mainMutedStyle(colorBgCard)
+	readyCount := 0
+	for _, feature := range deploymentFeatures {
+		if feature.ready {
+			readyCount++
+		}
+	}
+	summary := fmt.Sprintf("%d ready / %d soon", readyCount, max(len(deploymentFeatures)-readyCount, 0))
 	lines := []string{
 		cardContentLine(card, "", width),
-		cardContentLine(card, "  "+title.Render("Deployment"), width),
+		cardContentLine(card, "  "+title.Render("Choose deployment type")+mutedStyle.Render("  "+summary), width),
+		cardContentLine(card, "  "+mutedStyle.Render("Move with arrows or j/k. Enter opens selection."), width),
 		cardContentLine(card, "", width),
 	}
 	for index, feature := range deploymentFeatures {
 		lines = append(lines, deploymentFeatureBox(card, cardWidth, width, feature, index == activeIndex)...)
-		lines = append(lines, cardContentLine(card, "", width))
 	}
+	lines = append(lines, cardContentLine(card, "", width))
 	return lines
 }
 
@@ -50,33 +83,46 @@ func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature dep
 	border := lipgloss.Color(colorBorder)
 	labelStyle := mainBodyStyle(colorBgCard)
 	mutedStyle := mainMutedStyle(colorBgCard)
-	cursorStyle := mainBodyStyle(colorBgCard)
-	cursor := "  "
+	markerStyle := mainMutedStyle(colorBgCard)
+	statusStyle := mainMutedStyle(colorBgCard)
+	marker := " "
 	if active {
 		border = lipgloss.Color(colorPrimary)
 		labelStyle = mainPrimaryStyle(colorBgCard)
-		cursorStyle = mainPrimaryStyle(colorBgCard)
-		cursor = "> "
+		markerStyle = mainPrimaryStyle(colorBgCard)
+		marker = "▌"
+	}
+	if feature.ready {
+		statusStyle = mainPrimaryStyle(colorBgCard)
 	}
 	description := feature.description
 	if !feature.ready {
 		description += " Coming soon."
 	}
-	boxWidth := max(cardWidth-4, 24)
-	labelWidth := max(boxWidth-34, 12)
-	descWidth := max(boxWidth-labelWidth-8, 8)
-	content := cursorStyle.Render(cursor) +
+	boxWidth := max(cardWidth-6, 32)
+	contentWidth := max(boxWidth-4, 24)
+	statusWidth := 7
+	labelWidth := 22
+	if contentWidth < 62 {
+		labelWidth = 18
+	}
+	descWidth := max(contentWidth-labelWidth-statusWidth-6, 8)
+	status := deploymentStatusText(feature.ready)
+	content := markerStyle.Render(marker) +
+		mainBodyStyle(colorBgCard).Render("  ") +
 		labelStyle.Render(pad(truncatePlain(feature.label, labelWidth), labelWidth)) +
 		mainBodyStyle(colorBgCard).Render("  ") +
-		mutedStyle.Render(truncatePlain(description, descWidth))
+		mutedStyle.Render(pad(truncatePlain(description, descWidth), descWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		statusStyle.Render(pad(status, statusWidth))
 	box := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText)).
 		Width(boxWidth).
-		Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
 		BorderBackground(rowBg).
+		Padding(0, 1).
 		Render(content)
 	rendered := strings.Split(box, "\n")
 	lines := make([]string, 0, len(rendered))
@@ -84,6 +130,13 @@ func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature dep
 		lines = append(lines, cardContentLine(card, "  "+line, width))
 	}
 	return lines
+}
+
+func deploymentStatusText(ready bool) string {
+	if ready {
+		return "ready"
+	}
+	return "soon"
 }
 
 func databaseDeployFormCard(m model, width int) []string {

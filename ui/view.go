@@ -148,8 +148,14 @@ func (m model) launcherView(width, height int) tea.View {
 	}
 	lines = append(lines, "")
 	lines = append(lines, "")
-	lines = append(lines, "")
-	lines = append(lines, "")
+	if m.state == stateLoggedOut && m.logoutSucceeded {
+		lines = append(lines, centerLine(fgGreen+bold+"Signed out successfully"+reset, width))
+		lines = append(lines, centerLine(fgMuted+"Local session cleared. Next login will ask you to sign in again."+reset, width))
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, "")
+		lines = append(lines, "")
+	}
 
 	menuWidth := min(max(width/2, 50), 62)
 	for index, item := range m.launcherItems() {

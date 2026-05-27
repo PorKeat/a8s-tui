@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"a8s-tui/config"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,7 +16,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-	"a8s-tui/config"
 )
 
 const tokenRefreshSkew = 30 * time.Second
@@ -132,6 +132,8 @@ func (a AuthClient) buildLoginURL(state, challenge string) (string, error) {
 	values.Set("client_id", a.config.KeycloakClientID)
 	values.Set("redirect_uri", a.config.KeycloakRedirectURL)
 	values.Set("scope", "openid profile email")
+	values.Set("prompt", "login select_account")
+	values.Set("max_age", "0")
 	values.Set("state", state)
 	values.Set("code_challenge", challenge)
 	values.Set("code_challenge_method", "S256")
@@ -163,11 +165,28 @@ func (a AuthClient) Refresh(ctx context.Context, current TokenSet) (TokenSet, er
 }
 
 func (a AuthClient) Logout(current TokenSet) error {
+	if strings.TrimSpace(current.IDToken) == "" && strings.TrimSpace(current.AccessToken) == "" && strings.TrimSpace(current.RefreshToken) == "" {
+		return nil
+	}
 	logoutURL, err := a.buildLogoutURL(current)
 	if err != nil {
 		return err
 	}
-	return a.OpenURL(logoutURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, logoutURL, nil)
+	if err != nil {
+		return err
+	}
+	res, err := a.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("call Keycloak logout: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("Keycloak logout failed with HTTP %d", res.StatusCode)
+	}
+	return nil
 }
 
 func (a AuthClient) buildLogoutURL(current TokenSet) (string, error) {
@@ -184,6 +203,13 @@ func (a AuthClient) buildLogoutURL(current TokenSet) (string, error) {
 	return logoutURL.String(), nil
 }
 
+func (a AuthClient) httpClient() *http.Client {
+	if a.client != nil {
+		return a.client
+	}
+	return &http.Client{Timeout: 20 * time.Second}
+}
+
 func (a AuthClient) tokenRequest(ctx context.Context, values url.Values) (TokenSet, error) {
 	req, err := http.NewRequestWithContext(
 		ctx,
@@ -197,7 +223,7 @@ func (a AuthClient) tokenRequest(ctx context.Context, values url.Values) (TokenS
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	res, err := a.client.Do(req)
+	res, err := a.httpClient().Do(req)
 	if err != nil {
 		return TokenSet{}, err
 	}
@@ -287,12 +313,14 @@ func loginSuccessHTML() string {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #1f2130;
-      --panel: #25283a;
-      --text: #c8f7ff;
-      --muted: #8f9ab8;
+      --bg: #130e0b;
+      --panel: #2b221b;
+      --panel-soft: #231b16;
+      --text: #f5f1eb;
+      --muted: #9f9186;
       --accent: #f56618;
-      --ok: #a6da95;
+      --border: #5b4638;
+      --ok: #77f27f;
     }
     * { box-sizing: border-box; }
     body {
@@ -300,49 +328,70 @@ func loginSuccessHTML() string {
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, rgba(245, 102, 24, .08), transparent 34%),
+        var(--bg);
       color: var(--text);
       font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
     main {
-      width: min(92vw, 680px);
-      padding: 48px;
-      border: 1px solid rgba(245, 102, 24, .22);
+      width: min(92vw, 640px);
+      padding: 42px;
+      border: 1px solid var(--border);
       background: var(--panel);
       text-align: center;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
+    }
+    .brand {
+      margin: 0 0 28px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .18em;
     }
     .mark {
-      width: 56px;
-      height: 56px;
+      width: 64px;
+      height: 64px;
       margin: 0 auto 24px;
-      border: 1px solid rgba(166, 218, 149, .45);
+      border: 1px solid rgba(119, 242, 127, .45);
+      background: var(--panel-soft);
       display: grid;
       place-items: center;
       color: var(--ok);
-      font-size: 30px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .08em;
     }
     h1 {
       margin: 0 0 12px;
-      color: var(--accent);
+      color: var(--text);
       font-size: 28px;
       letter-spacing: 0;
     }
     p {
-      margin: 0;
+      margin: 0 0 6px;
       color: var(--muted);
     }
     strong {
-      color: var(--text);
+      color: var(--accent);
       font-weight: 700;
+    }
+    .rule {
+      width: 88px;
+      height: 2px;
+      margin: 24px auto 0;
+      background: var(--accent);
     }
   </style>
 </head>
 <body>
   <main>
+    <div class="brand">AUTONOMOUS</div>
     <div class="mark">OK</div>
     <h1>Login successful</h1>
     <p>You are already logged in to <strong>A8S TUI</strong>.</p>
     <p>You can close this tab and return to your terminal.</p>
+    <div class="rule"></div>
   </main>
 </body>
 </html>`

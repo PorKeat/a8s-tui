@@ -4,6 +4,9 @@ import (
 	"a8s-tui/api"
 	"a8s-tui/auth"
 	"a8s-tui/config"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -187,13 +190,30 @@ func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
 }
 
 func TestLogoutClearsSession(t *testing.T) {
+	logoutCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/realms/a8s/protocol/openid-connect/logout") {
+			t.Fatalf("unexpected logout path %q", r.URL.Path)
+		}
+		if r.URL.Query().Get("id_token_hint") != "id-token" {
+			t.Fatalf("id_token_hint = %q", r.URL.Query().Get("id_token_hint"))
+		}
+		logoutCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
 	m := initialModel(config.AppConfig{
 		BackendBaseURL:   "http://backend",
-		KeycloakURL:      "https://keycloak.example.com",
+		KeycloakURL:      server.URL,
 		KeycloakRealm:    "a8s",
 		KeycloakClientID: "a8s-tui",
 	}, nil)
-	m.auth.OpenURL = func(string) error { return nil }
+	openURLCalled := false
+	m.auth.OpenURL = func(string) error {
+		openURLCalled = true
+		return nil
+	}
 	m.state = stateReady
 	m.tokens = auth.TokenSet{AccessToken: "access", IDToken: "id-token"}
 	m.projects = []api.LiveProject{{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"}}
@@ -204,13 +224,19 @@ func TestLogoutClearsSession(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected logout command")
 	}
-	if m.state != stateLoggedOut || m.tokens.AccessToken != "" || len(m.projects) != 0 || m.filter != "" {
+	if m.state != stateLoggedOut || !m.logoutSucceeded || m.tokens.AccessToken != "" || len(m.projects) != 0 || m.filter != "" {
 		t.Fatalf("session was not cleared: %#v", m)
 	}
 
 	msg := cmd()
 	if result, ok := msg.(logoutResultMsg); !ok || result.err != nil {
 		t.Fatalf("logout result = %#v", msg)
+	}
+	if openURLCalled {
+		t.Fatal("logout should not open the browser")
+	}
+	if !logoutCalled {
+		t.Fatal("expected Keycloak logout endpoint to be called")
 	}
 }
 

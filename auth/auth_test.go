@@ -1,11 +1,11 @@
 package auth
 
 import (
+	"a8s-tui/config"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"a8s-tui/config"
 	"net/url"
 	"strings"
 	"testing"
@@ -49,6 +49,8 @@ func TestBuildLoginURL(t *testing.T) {
 		"client_id":             "a8s-tui",
 		"redirect_uri":          "http://localhost:8250/callback",
 		"scope":                 "openid profile email",
+		"prompt":                "login select_account",
+		"max_age":               "0",
 		"state":                 "state-value",
 		"code_challenge":        "challenge-value",
 		"code_challenge_method": "S256",

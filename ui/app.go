@@ -71,6 +71,7 @@ type model struct {
 	deployLog         api.DatabaseDeploymentRecord
 	deployLogOffset   int
 	darkMode          bool
+	logoutSucceeded   bool
 	message           string
 	lastRefreshed     time.Time
 	userName          string
@@ -195,6 +196,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.tokens = msg.tokens
+		m.logoutSucceeded = false
 		m.state = stateLoading
 		m.message = "Authenticated. Loading live projects..."
 		return m, m.fetchProjectsCmd()
@@ -219,7 +221,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case logoutResultMsg:
 		if msg.err != nil {
-			m.message = "Logged out locally. Browser logout failed: " + msg.err.Error()
+			m.message = "Logged out locally. Remote logout skipped: " + msg.err.Error()
+		} else {
+			m.message = "Signed out successfully. Press enter to sign in again."
 		}
 	case databaseDeployResultMsg:
 		if msg.tokens.AccessToken != "" {
@@ -631,6 +635,7 @@ func (f databaseDeployForm) input() (api.CreateDatabaseDeploymentInput, error) {
 func (m model) startLoginIfAvailable() (tea.Model, tea.Cmd) {
 	if m.state == stateLoggedOut || m.state == stateError {
 		m.state = stateLoggingIn
+		m.logoutSucceeded = false
 		m.message = "Opening Keycloak login in your browser..."
 		return m, m.loginCmd()
 	}
@@ -738,11 +743,9 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.launcherCursor = 0
 	m.lastRefreshed = time.Time{}
 	m.state = stateLoggedOut
-	m.message = "Logged out. Press enter to login again."
+	m.logoutSucceeded = true
+	m.message = "Logging out locally..."
 	return m, func() tea.Msg {
-		if tokens.IDToken == "" && tokens.AccessToken == "" && tokens.RefreshToken == "" {
-			return logoutResultMsg{}
-		}
 		return logoutResultMsg{err: authClient.Logout(tokens)}
 	}
 }

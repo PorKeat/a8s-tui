@@ -153,11 +153,20 @@ func sidebarNavLine(item navigationItem, width int, active, current bool) []stri
 	labelStyle := styleSideText
 	keyStyle := styleSideMuted
 	iconBg := colorBgSide
-	prefix := "   "
+	markerStyle := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText))
+	prefix := markerStyle.Render("   ")
 	if active {
 		rowBg = lipgloss.Color(colorBgActive)
 		iconBg = colorBgActive
-		prefix = " " + fgLogo + "▌" + reset + " "
+		markerStyle = lipgloss.NewStyle().
+			Background(rowBg).
+			Foreground(lipgloss.Color(colorPrimary))
+		rowSpaceStyle := lipgloss.NewStyle().
+			Background(rowBg).
+			Foreground(lipgloss.Color(colorText))
+		prefix = rowSpaceStyle.Render(" ") + markerStyle.Render("▌") + rowSpaceStyle.Render(" ")
 		labelStyle = lipgloss.NewStyle().
 			Background(rowBg).
 			Foreground(lipgloss.Color(colorPrimary)).
@@ -167,7 +176,15 @@ func sidebarNavLine(item navigationItem, width int, active, current bool) []stri
 			Foreground(lipgloss.Color(colorPrimary)).
 			Bold(true)
 	} else if current {
-		prefix = " " + fgAccent + "•" + reset + " "
+		markerStyle = lipgloss.NewStyle().
+			Background(rowBg).
+			Foreground(lipgloss.Color(colorText))
+		prefix = markerStyle.Render(" ") +
+			lipgloss.NewStyle().
+				Background(rowBg).
+				Foreground(lipgloss.Color(colorPrimary)).
+				Render("•") +
+			markerStyle.Render(" ")
 		labelStyle = lipgloss.NewStyle().
 			Background(rowBg).
 			Foreground(lipgloss.Color(colorTitle)).
@@ -176,16 +193,22 @@ func sidebarNavLine(item navigationItem, width int, active, current bool) []stri
 	rowPad := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText))
-	left := rowPad.Render(prefix) +
+	left := prefix +
 		dashboardItemIcon(item, iconBg) +
 		rowPad.Render("  ") +
 		labelStyle.Render(truncatePlain(item.label, max(width-15, 4)))
 	right := keyStyle.Render(item.key + "  ")
-	gap := rowPad.Render(spaces(max(width-visibleLen(left)-visibleLen(right)-2, 0)))
+	contentWidth := max(width-2, 8)
+	lead := styleSide.Render(" ")
+	if active {
+		contentWidth = max(width, 8)
+		lead = ""
+	}
+	gap := rowPad.Render(spaces(max(contentWidth-visibleLen(left)-visibleLen(right), 0)))
 	box := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText)).
-		Width(max(width-2, 8)).
+		Width(contentWidth).
 		Render(left + gap + right)
-	return []string{sideContentLine(styleSide.Render(" ")+box, width)}
+	return []string{sideContentLine(lead+box, width)}
 }
