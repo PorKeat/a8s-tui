@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.2
 )
 
+
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260416155717-489999b90468 // indirect

@@ -11,8 +11,8 @@ pipeline {
     stages {
 
 
-        stage('Build & Test (Main Branch)') {
-            when { branch 'main' }
+        stage('Build & Test') {
+            // Always run build and test on every push to ensure code is healthy
             steps {
                 sh 'go build .'
                 sh 'go test ./...'
@@ -20,7 +20,13 @@ pipeline {
         }
 
         stage('Publish Release (Tags Only)') {
-            when { buildingTag() }
+            // This runs a git command to see if the current commit is a tag. 
+            // It works flawlessly in standard pipelines.
+            when { 
+                expression { 
+                    return sh(script: 'git describe --exact-match --tags HEAD > /dev/null 2>&1', returnStatus: true) == 0 
+                } 
+            }
             stages {
                 stage('Release Go Binaries') {
                     steps {
