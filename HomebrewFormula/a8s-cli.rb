@@ -5,20 +5,20 @@
 class A8sCli < Formula
   desc "The official CLI for Autonomous 8s"
   homepage "https://github.com/ITProfessional-Gen01/a8s-cli"
-  version "1.1.3"
+  version "1.1.4"
 
   on_macos do
     on_intel do
-      url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.3/a8s-cli_darwin_amd64.tar.gz"
-      sha256 "eb7963d026540de25bc41f9ae30dc9a842ef9fabe6679be9589721221b7ae34d"
+      url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.4/a8s-cli_darwin_amd64.tar.gz"
+      sha256 "92eddc5438607b84b0f8f15f1bcf35bbfa6e8d30f91575e421f644d8c4b9df34"
 
       def install
         bin.install "a8s-cli"
       end
     end
     on_arm do
-      url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.3/a8s-cli_darwin_arm64.tar.gz"
-      sha256 "0f1c384ec5d0322abf53017a66559757b8facdb67760750e5153688217debc7c"
+      url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.4/a8s-cli_darwin_arm64.tar.gz"
+      sha256 "c6d8733121dcb4309a3e0454229fd5352e6407b7156467dc1c4b197b4f571147"
 
       def install
         bin.install "a8s-cli"
@@ -29,8 +29,8 @@ class A8sCli < Formula
   on_linux do
     on_intel do
       if Hardware::CPU.is_64_bit?
-        url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.3/a8s-cli_linux_amd64.tar.gz"
-        sha256 "855b0bf7bb87cd418a898de65662286c29e0b6ad421319f9e09d12590b11893d"
+        url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.4/a8s-cli_linux_amd64.tar.gz"
+        sha256 "2f9c2c4a28f0f286514e8dda4938f971c94b7905ddf704d884cb0a8e324f2adf"
 
         def install
           bin.install "a8s-cli"
@@ -39,8 +39,8 @@ class A8sCli < Formula
     end
     on_arm do
       if Hardware::CPU.is_64_bit?
-        url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.3/a8s-cli_linux_arm64.tar.gz"
-        sha256 "80ebd2301dd2a0d445fd24af959d2c8f023617872e1cd893e6e134486ef83148"
+        url "https://github.com/ITProfessional-Gen01/a8s-cli/releases/download/v1.1.4/a8s-cli_linux_arm64.tar.gz"
+        sha256 "be6326c5670fcbb95f2784259fc2fcef546efaf52abde55f3a012b31a4f5c335"
 
         def install
           bin.install "a8s-cli"
