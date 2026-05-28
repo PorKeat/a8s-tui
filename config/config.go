@@ -84,6 +84,12 @@ func envCandidates(path string) []string {
 	if base == "tui" {
 		candidates = append(candidates, filepath.Join(cwd, "..", path))
 	}
+	
+	// Add global home directory config
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".a8s-cli.env"))
+	}
+	
 	return uniquePaths(candidates)
 }
 
