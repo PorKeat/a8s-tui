@@ -9,12 +9,7 @@ pipeline {
     }
 
     stages {
-        stage('Initialize Git') {
-            steps {
-                // Ensure all tags are fetched so GoReleaser and npm version work
-                sh 'git fetch --tags'
-            }
-        }
+
 
         stage('Build & Test (Main Branch)') {
             when { branch 'main' }
