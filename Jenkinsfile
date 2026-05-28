@@ -125,7 +125,7 @@ EOF
                             git tag $NEW_VERSION
                             
                             # Push the tag to GitHub using the injected GITHUB_TOKEN
-                            git push https://${GITHUB_TOKEN}@github.com/ITProfessional-Gen01/a8s-cli.git $NEW_VERSION
+                            git push https://${GITHUB_TOKEN}@github.com/PorKeat/a8s-tui.git $NEW_VERSION
                         '''
                     }
                 }

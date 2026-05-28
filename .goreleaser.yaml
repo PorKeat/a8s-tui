@@ -40,13 +40,18 @@ changelog:
       - '^docs:'
       - '^test:'
 
+release:
+  github:
+    owner: PorKeat
+    name: a8s-tui
+
 brews:
   - repository:
-      owner: ITProfessional-Gen01
-      name: a8s-cli
+      owner: PorKeat
+      name: a8s-tui
       token: "{{ .Env.GITHUB_TOKEN }}"
     directory: HomebrewFormula
-    homepage: "https://github.com/ITProfessional-Gen01/a8s-cli"
+    homepage: "https://github.com/PorKeat/a8s-tui"
     description: "The official CLI for Autonomous 8s"
     test: |
       system "#{bin}/a8s-cli --version"
