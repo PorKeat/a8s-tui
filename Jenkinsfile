@@ -62,8 +62,11 @@ pipeline {
                 stage('Tag Repository') {
                     steps {
                         sh '''#!/bin/bash
-                            # Find the latest tag, default to v0.0.0 if none exist
-                            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+                            # Find the absolute highest tag in the entire repository
+                            LATEST=$(git tag -l | sort -V | tail -n 1)
+                            if [ -z "$LATEST" ]; then
+                                LATEST="v0.0.0"
+                            fi
                             VERSION=${LATEST#v}
                             
                             # Split version into Major, Minor, Patch
