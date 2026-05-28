@@ -88,12 +88,12 @@ To quickly commit and push your code:
 
 ## Publishing a Release
 
-Releases are fully automated via GitHub Actions, GoReleaser, and NPM. To publish a new version to the world:
+Releases are fully automated via Jenkins, GoReleaser, and NPM. To publish a new version to the world:
 
-1. Ensure your NPM token is set in GitHub Secrets as `NPM_TOKEN`.
+1. Ensure your NPM and GitHub tokens are set in your Jenkins Credentials Manager.
 2. Push a new Git tag:
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
-GitHub Actions will automatically build binaries for all platforms, update Homebrew, and publish to NPM!
+Jenkins will automatically build binaries for all platforms, update Homebrew, and publish to NPM!
