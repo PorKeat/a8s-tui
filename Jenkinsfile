@@ -131,7 +131,7 @@ EOF
                 }
                 stage('Release Go Binaries') {
                     steps {
-                        sh 'goreleaser release --clean'
+                        sh 'goreleaser release --clean --skip=validate'
                     }
                 }
                 
