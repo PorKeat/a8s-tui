@@ -8,4 +8,13 @@
 
 # Optional: Ignore all .env files EXCEPT .env.example
 .env*
-!.env.example.envnode_modules/
+!.env.example
+
+# Node dependencies
+node_modules/
+
+# Go compiled binaries
+a8s-cli
+a8s-tui
+dist/
+coverage.out
