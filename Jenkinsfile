@@ -34,10 +34,10 @@ pipeline {
                         mv $HOME/.local/node-v20.14.0-linux-x64 $HOME/.local/node
                     fi
                     
-                    # Install GoReleaser if missing
+                    # Install GoReleaser if missing (v2 required for version: 2 config)
                     if ! command -v goreleaser >/dev/null 2>&1; then
-                        echo "Downloading and installing GoReleaser..."
-                        wget -qO- https://github.com/goreleaser/goreleaser/releases/download/v1.26.2/goreleaser_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin/ goreleaser
+                        echo "Downloading and installing GoReleaser v2..."
+                        wget -qO- https://github.com/goreleaser/goreleaser/releases/download/v2.0.1/goreleaser_Linux_x86_64.tar.gz | tar -xz -C $HOME/.local/bin/ goreleaser
                     fi
                 '''
             }
@@ -51,7 +51,7 @@ pipeline {
             }
         }
 
-        stage('Publish Release (Manual)') {
+        stage('Publish Release') {
             // This stage only runs if you type a version number into Jenkins when you click Build
             when { 
                 expression { 
@@ -61,7 +61,7 @@ pipeline {
             stages {
                 stage('Tag Repository') {
                     steps {
-                        sh '''
+                        sh '''#!/bin/bash
                             VERSION=${RELEASE_VERSION}
                             if [[ $VERSION != v* ]]; then
                                 VERSION="v$VERSION"
@@ -88,7 +88,7 @@ pipeline {
                 stage('Publish to NPM') {
                     steps {
                         sh 'npm ci'
-                        sh '''
+                        sh '''#!/bin/bash
                             VERSION=${RELEASE_VERSION}
                             if [[ $VERSION == v* ]]; then
                                 VERSION=${VERSION#v}
