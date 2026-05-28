@@ -2,6 +2,10 @@ pipeline {
     // Run directly on the Jenkins server host machine (no Docker required)
     agent any
 
+    parameters {
+        string(name: 'RELEASE_VERSION', defaultValue: '', description: 'Leave blank for a normal test build. To publish a release, enter the version (e.g., 1.0.0)')
+    }
+
     environment {
         // These credentials must be configured in Jenkins
         GITHUB_TOKEN = credentials('github-token-cli')
@@ -47,15 +51,34 @@ pipeline {
             }
         }
 
-        stage('Publish Release (Tags Only)') {
-            // This runs a git command to see if the current commit is a tag. 
-            // It works flawlessly in standard pipelines.
+        stage('Publish Release (Manual)') {
+            // This stage only runs if you type a version number into Jenkins when you click Build
             when { 
                 expression { 
-                    return sh(script: 'git describe --exact-match --tags HEAD > /dev/null 2>&1', returnStatus: true) == 0 
+                    return params.RELEASE_VERSION != null && params.RELEASE_VERSION.trim() != ''
                 } 
             }
             stages {
+                stage('Tag Repository') {
+                    steps {
+                        sh '''
+                            VERSION=${RELEASE_VERSION}
+                            if [[ $VERSION != v* ]]; then
+                                VERSION="v$VERSION"
+                            fi
+                            
+                            # Configure Git so it can tag
+                            git config user.email "jenkins@a8s.com"
+                            git config user.name "Jenkins Auto-Publisher"
+                            
+                            # Create the tag locally
+                            git tag $VERSION
+                            
+                            # Push the tag to GitHub using the injected GITHUB_TOKEN
+                            git push https://${GITHUB_TOKEN}@github.com/ITProfessional-Gen01/a8s-cli.git $VERSION
+                        '''
+                    }
+                }
                 stage('Release Go Binaries') {
                     steps {
                         sh 'goreleaser release --clean'
@@ -66,9 +89,10 @@ pipeline {
                     steps {
                         sh 'npm ci'
                         sh '''
-                            # Get the current tag and strip the 'v'
-                            VERSION=$(git describe --tags --abbrev=0)
-                            VERSION=${VERSION#v}
+                            VERSION=${RELEASE_VERSION}
+                            if [[ $VERSION == v* ]]; then
+                                VERSION=${VERSION#v}
+                            fi
                             
                             # Update package.json version
                             npm version $VERSION --no-git-tag-version
