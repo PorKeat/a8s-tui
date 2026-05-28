@@ -122,18 +122,28 @@ func (m model) sidebarSearchText() string {
 }
 
 func sidebarBrand(width int) []string {
-	title := lipgloss.NewStyle().
+	part1 := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgSide)).
+		Foreground(lipgloss.Color(colorTitle)).
+		Bold(true).
+		Render("A 8 S   ")
+		
+	part2 := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorBgSide)).
 		Foreground(lipgloss.Color(colorPrimary)).
 		Bold(true).
-		Render("AUTONOMOUS")
-	line := styleSide.Render("  ") + title
+		Render("A U T O N O M O U S")
+		
+	line := styleSide.Render("  ") + part1 + part2
+	
 	rule := styleSide.Render("  ") +
 		lipgloss.NewStyle().
-			Background(lipgloss.Color(colorPrimary)).
-			Foreground(lipgloss.Color(colorPrimary)).
-			Render(strings.Repeat(" ", max(width-4, 1)))
+			Background(lipgloss.Color(colorBgSide)).
+			Foreground(lipgloss.Color(colorBorder)).
+			Render(strings.Repeat("─", max(width-4, 1)))
+			
 	return []string{
+		sideContentLine("", width),
 		sideContentLine(line, width),
 		sideContentLine(rule, width),
 	}
@@ -174,20 +184,6 @@ func sidebarNavLine(item navigationItem, width int, active, current bool) []stri
 		keyStyle = lipgloss.NewStyle().
 			Background(rowBg).
 			Foreground(lipgloss.Color(colorPrimary)).
-			Bold(true)
-	} else if current {
-		markerStyle = lipgloss.NewStyle().
-			Background(rowBg).
-			Foreground(lipgloss.Color(colorText))
-		prefix = markerStyle.Render(" ") +
-			lipgloss.NewStyle().
-				Background(rowBg).
-				Foreground(lipgloss.Color(colorPrimary)).
-				Render("•") +
-			markerStyle.Render(" ")
-		labelStyle = lipgloss.NewStyle().
-			Background(rowBg).
-			Foreground(lipgloss.Color(colorTitle)).
 			Bold(true)
 	}
 	rowPad := lipgloss.NewStyle().
