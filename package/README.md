@@ -9,7 +9,7 @@ You can install `a8s-cli` using any of the following methods:
 ### 1. NPM (Node Package Manager)
 The fastest way for web developers:
 ```bash
-npm install -g a8s-cli
+npm install -g a8s-tui
 ```
 *(This automatically detects your OS and downloads the native Go binary—it does not run slow JavaScript!)*
 

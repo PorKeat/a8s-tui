@@ -11,13 +11,13 @@ You can install the A8S CLI using any of the following methods.
 Run without installing:
 
 ```bash
-npx a8s-cli
+npx a8s-tui
 ```
 
 Or install globally:
 
 ```bash
-npm install -g a8s-cli
+npm install -g a8s-tui
 ```
 
 Run it with:
@@ -31,13 +31,13 @@ a8s-cli
 Run without installing:
 
 ```bash
-pnpm dlx a8s-cli
+pnpm dlx a8s-tui
 ```
 
 Or install globally:
 
 ```bash
-pnpm add -g a8s-cli
+pnpm add -g a8s-tui
 ```
 
 Run it with:
@@ -51,13 +51,13 @@ a8s-cli
 Run without installing:
 
 ```bash
-yarn dlx a8s-cli
+yarn dlx a8s-tui
 ```
 
 Or install globally:
 
 ```bash
-yarn global add a8s-cli
+yarn global add a8s-tui
 ```
 
 Run it with:
@@ -71,13 +71,13 @@ a8s-cli
 Run without installing:
 
 ```bash
-bunx a8s-cli
+bunx a8s-tui
 ```
 
 Or install globally:
 
 ```bash
-bun add -g a8s-cli
+bun add -g a8s-tui
 ```
 
 Run it with:
