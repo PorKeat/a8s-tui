@@ -43,7 +43,7 @@ func TestResolveBackendBaseURLPrecedence(t *testing.T) {
 
 func TestResolveBackendBaseURLFallback(t *testing.T) {
 	got := resolveBackendBaseURL(map[string]string{})
-	if got != "http://localhost:8080" {
+	if got != "" {
 		t.Fatalf("fallback URL = %q", got)
 	}
 }
@@ -58,6 +58,15 @@ func TestLoadConfigUsesOnlyTUIEnvFile(t *testing.T) {
 	if err := os.MkdirAll(frontendDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+
+	for _, key := range backendURLKeys {
+		os.Unsetenv(key)
+	}
+	os.Unsetenv("KEYCLOAK_URL")
+	os.Unsetenv("KEYCLOAK_REALM")
+	os.Unsetenv("KEYCLOAK_CLIENT_ID")
+	os.Unsetenv("KEYCLOAK_CLIENT_SECRET")
+	os.Unsetenv("KEYCLOAK_REDIRECT_URL")
 
 	frontendEnv := strings.Join([]string{
 		"KEYCLOAK_URL=https://wrong-keycloak.example.com",
