@@ -3,7 +3,7 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'RELEASE_VERSION', defaultValue: '', description: 'Leave blank for a normal test build. To publish a release, enter the version (e.g., 1.0.0)')
+        choice(name: 'RELEASE_TYPE', choices: ['None', 'Patch (0.0.x)', 'Minor (0.x.0)', 'Major (x.0.0)'], description: 'Select the type of release. Select "None" to just run normal tests without publishing.')
     }
 
     environment {
@@ -52,30 +52,53 @@ pipeline {
         }
 
         stage('Publish Release') {
-            // This stage only runs if you type a version number into Jenkins when you click Build
+            // This stage only runs if you selected Patch, Minor, or Major
             when { 
                 expression { 
-                    return params.RELEASE_VERSION != null && params.RELEASE_VERSION.trim() != ''
+                    return params.RELEASE_TYPE != 'None'
                 } 
             }
             stages {
                 stage('Tag Repository') {
                     steps {
                         sh '''#!/bin/bash
-                            VERSION=${RELEASE_VERSION}
-                            if [[ $VERSION != v* ]]; then
-                                VERSION="v$VERSION"
+                            # Find the latest tag, default to v0.0.0 if none exist
+                            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+                            VERSION=${LATEST#v}
+                            
+                            # Split version into Major, Minor, Patch
+                            IFS='.' read -ra ADDR <<< "$VERSION"
+                            MAJOR=${ADDR[0]:-0}
+                            MINOR=${ADDR[1]:-0}
+                            PATCH=${ADDR[2]:-0}
+                            
+                            # Auto-increment the correct number
+                            if [ "$RELEASE_TYPE" = "Patch (0.0.x)" ]; then
+                                PATCH=$((PATCH + 1))
+                            elif [ "$RELEASE_TYPE" = "Minor (0.x.0)" ]; then
+                                MINOR=$((MINOR + 1))
+                                PATCH=0
+                            elif [ "$RELEASE_TYPE" = "Major (x.0.0)" ]; then
+                                MAJOR=$((MAJOR + 1))
+                                MINOR=0
+                                PATCH=0
                             fi
+                            
+                            NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+                            echo "🚀 Auto-bumping version from $LATEST to $NEW_VERSION"
+                            
+                            # Save the new version to a file so the NPM stage knows what it is
+                            echo "$NEW_VERSION" > .release_version
                             
                             # Configure Git so it can tag
                             git config user.email "jenkins@a8s.com"
                             git config user.name "Jenkins Auto-Publisher"
                             
                             # Create the tag locally
-                            git tag $VERSION
+                            git tag $NEW_VERSION
                             
                             # Push the tag to GitHub using the injected GITHUB_TOKEN
-                            git push https://${GITHUB_TOKEN}@github.com/ITProfessional-Gen01/a8s-cli.git $VERSION
+                            git push https://${GITHUB_TOKEN}@github.com/ITProfessional-Gen01/a8s-cli.git $NEW_VERSION
                         '''
                     }
                 }
@@ -89,10 +112,9 @@ pipeline {
                     steps {
                         sh 'npm ci'
                         sh '''#!/bin/bash
-                            VERSION=${RELEASE_VERSION}
-                            if [[ $VERSION == v* ]]; then
-                                VERSION=${VERSION#v}
-                            fi
+                            # Read the version we just created
+                            VERSION=$(cat .release_version)
+                            VERSION=${VERSION#v}
                             
                             # Update package.json version
                             npm version $VERSION --no-git-tag-version
