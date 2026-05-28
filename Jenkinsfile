@@ -125,13 +125,16 @@ EOF
                             git tag $NEW_VERSION
                             
                             # Push the tag to the repository
-                            git push https://${GITHUB_TOKEN}@github.com/PorKeat/a8s-tui.git $NEW_VERSION
+                            # Use origin URL but inject the GITHUB_TOKEN for authentication
+                            REMOTE_URL=$(git remote get-url origin | sed "s|https://|https://${GITHUB_TOKEN}@|")
+                            git push $REMOTE_URL $NEW_VERSION
                         '''
                     }
                 }
                 stage('Release Go Binaries') {
                     steps {
-                        sh 'goreleaser release --clean --skip=validate'
+                        // Pass GITHUB_TOKEN to goreleaser so it can create the release
+                        sh 'GITHUB_TOKEN=${GITHUB_TOKEN} goreleaser release --clean --skip=validate'
                     }
                 }
                 

@@ -42,13 +42,11 @@ changelog:
 
 release:
   github:
-    owner: PorKeat
-    name: a8s-tui
+    # owner and name will be automatically detected from the remote
 
 brews:
   - repository:
-      owner: PorKeat
-      name: a8s-tui
+      # owner and name will be automatically detected from the remote
       token: "{{ .Env.GITHUB_TOKEN }}"
     directory: HomebrewFormula
     homepage: "https://github.com/PorKeat/a8s-tui"
