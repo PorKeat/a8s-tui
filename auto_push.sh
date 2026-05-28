@@ -17,7 +17,10 @@ else
     git commit -m "$COMMIT_MSG"
 fi
 
-echo "🚀 Pushing to remote repository (current branch)..."
+echo "🚀 Pushing to private repo (origin)..."
 git push origin HEAD
 
-echo "✅ Done!"
+echo "🌍 Pushing to public repo (porkeat)..."
+git push porkeat HEAD
+
+echo "✅ Done! Pushed to both repos."
