@@ -42,7 +42,7 @@ func LoadConfig() (AppConfig, error) {
 	}
 
 	cfg := AppConfig{
-		BackendBaseURL:       resolveBackendBaseURL(values),
+		BackendBaseURL:       fallback(fallback(resolveBackendBaseURL(values), DefaultBackendBaseURL), "http://localhost:8080"),
 		KeycloakURL:          fallback(trimTrailingSlash(values["KEYCLOAK_URL"]), DefaultKeycloakURL),
 		KeycloakRealm:        fallback(strings.TrimSpace(values["KEYCLOAK_REALM"]), DefaultKeycloakRealm),
 		KeycloakClientID:     fallback(strings.TrimSpace(values["KEYCLOAK_CLIENT_ID"]), DefaultKeycloakClientID),
@@ -161,7 +161,7 @@ func resolveBackendBaseURL(values map[string]string) string {
 			return value
 		}
 	}
-	return "http://localhost:8080"
+	return ""
 }
 
 func trimTrailingSlash(value string) string {

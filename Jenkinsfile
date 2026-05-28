@@ -12,6 +12,7 @@ pipeline {
         NODE_AUTH_TOKEN = credentials('npm-token')
         
         // Keycloak Secrets to bake into the binary
+        BACKEND_API_URL = credentials('backend-api-url')
         KEYCLOAK_URL = credentials('keycloak-url')
         KEYCLOAK_REALM = credentials('keycloak-realm')
         KEYCLOAK_CLIENT_ID = credentials('keycloak-client-id')
@@ -60,6 +61,7 @@ pipeline {
 package config
 
 var (
+	DefaultBackendBaseURL       = "${BACKEND_API_URL}"
 	DefaultKeycloakURL          = "${KEYCLOAK_URL}"
 	DefaultKeycloakRealm        = "${KEYCLOAK_REALM}"
 	DefaultKeycloakClientID     = "${KEYCLOAK_CLIENT_ID}"
