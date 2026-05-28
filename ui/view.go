@@ -5,22 +5,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PorKeat/a8s-tui/ui/components"
+	uitheme "github.com/PorKeat/a8s-tui/ui/theme"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
 func applyTheme(dark bool) {
+	palette := uitheme.PaletteFor(dark)
+	colorPrimary = palette.Primary
+	colorBgMain = palette.BgMain
+	colorBgSide = palette.BgSide
+	colorBgCard = palette.BgCard
+	colorBgPill = palette.BgPill
+	colorBgActive = palette.BgActive
+	colorText = palette.Text
+	colorMuted = palette.Muted
+	colorTitle = palette.Title
+	colorBorder = palette.Border
+
 	if dark {
-		colorPrimary = "#f56618"
-		colorBgMain = "#130e0b"
-		colorBgSide = "#1f1712"
-		colorBgCard = "#2b221b"
-		colorBgPill = "#231b16"
-		colorBgActive = "#4f2f20"
-		colorText = "#ccbeb2"
-		colorMuted = "#9f9186"
-		colorTitle = "#f5f1eb"
-		colorBorder = "#5b4638"
 		fgBlue = ansiFg("#7aaeff")
 		fgPurple = ansiFg("#b59dff")
 		fgAccent = ansiFg("#5fd7ff")
@@ -28,16 +33,6 @@ func applyTheme(dark bool) {
 		fgError = ansiFg("#ff8787")
 		fgGreen = ansiFg("#77f27f")
 	} else {
-		colorPrimary = "#f56618"
-		colorBgMain = "#fbf7f2"
-		colorBgSide = "#f0e6db"
-		colorBgCard = "#fffaf4"
-		colorBgPill = "#eadccd"
-		colorBgActive = "#ffe4d4"
-		colorText = "#49372d"
-		colorMuted = "#7f6d62"
-		colorTitle = "#211712"
-		colorBorder = "#b79b89"
 		fgBlue = ansiFg("#2f6fbd")
 		fgPurple = ansiFg("#765bd8")
 		fgAccent = ansiFg("#0b7285")
@@ -620,6 +615,9 @@ func (m model) renderDashboardMain(width, height int) []string {
 	if m.dbFormOpen {
 		return m.renderDashboardDatabaseDeployForm(width, height)
 	}
+	if m.monolithFormOpen {
+		return m.renderDashboardMonolithicDeployForm(width, height)
+	}
 	if m.projectDetailOpen {
 		return m.renderDashboardProjectDetail(width, height)
 	}
@@ -942,14 +940,6 @@ func (m model) emptyStateText() string {
 	}
 }
 
-func (m model) kindCounts() map[string]int {
-	counts := map[string]int{}
-	for _, project := range m.projects {
-		counts[project.Kind]++
-	}
-	return counts
-}
-
 func (m model) statusline(width int) string {
 	left := bgBar + bold + fgLogo + " a8s " + reset
 	count := fmt.Sprintf(" %d/%d projects ", len(m.visibleProjects()), len(m.projects))
@@ -997,10 +987,7 @@ func (m model) databaseFormStatusline(width int) string {
 }
 
 func maskValue(value string) string {
-	if value == "" {
-		return ""
-	}
-	return strings.Repeat("*", max(len([]rune(value)), 8))
+	return components.MaskValue(value)
 }
 
 func paneTitle(title string, width int, active bool) string {
@@ -1058,11 +1045,7 @@ func centerLine(text string, width int) string {
 }
 
 func pad(text string, width int) string {
-	remaining := width - visibleLen(text)
-	if remaining <= 0 {
-		return text
-	}
-	return text + spaces(remaining)
+	return components.Pad(text, width)
 }
 
 func backgroundLine(text string, width int, bg string) string {
@@ -1093,26 +1076,11 @@ func fill(width int, text string) string {
 }
 
 func spaces(width int) string {
-	if width <= 0 {
-		return ""
-	}
-	return strings.Repeat(" ", width)
+	return components.Spaces(width)
 }
 
 func visibleLen(text string) int {
-	count := 0
-	inEscape := false
-	for _, r := range text {
-		switch {
-		case r == '\x1b':
-			inEscape = true
-		case inEscape && r == 'm':
-			inEscape = false
-		case !inEscape:
-			count++
-		}
-	}
-	return count
+	return components.VisibleLen(text)
 }
 
 func joinNonEmpty(values ...string) string {

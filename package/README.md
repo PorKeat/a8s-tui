@@ -4,145 +4,38 @@ The official command-line interface and terminal dashboard for Autonomous 8s (A8
 
 ## Installation
 
-You can install the A8S CLI using any of the following methods.
+You can install `a8s-cli` using any of the following methods:
 
-### NPM
-
-Run without installing:
-
-```bash
-npx a8s-cli
-```
-
-Or install globally:
-
+### 1. NPM (Node Package Manager)
+The fastest way for web developers:
 ```bash
 npm install -g a8s-cli
 ```
+*(This automatically detects your OS and downloads the native Go binary—it does not run slow JavaScript!)*
 
-Run it with:
-
-```bash
-a8s-cli
-```
-
-### PNPM
-
-Run without installing:
-
-```bash
-pnpm dlx a8s-cli
-```
-
-Or install globally:
-
-```bash
-pnpm add -g a8s-cli
-```
-
-Run it with:
-
-```bash
-a8s-cli
-```
-
-### Yarn
-
-Run without installing:
-
-```bash
-yarn dlx a8s-cli
-```
-
-Or install globally:
-
-```bash
-yarn global add a8s-cli
-```
-
-Run it with:
-
-```bash
-a8s-cli
-```
-
-### Bun
-
-Run without installing:
-
-```bash
-bunx a8s-cli
-```
-
-Or install globally:
-
-```bash
-bun add -g a8s-cli
-```
-
-Run it with:
-
-```bash
-a8s-cli
-```
-
-The Node package installs a tiny launcher that detects your OS/CPU and runs the bundled native Go binary.
-
-### Homebrew
-
-For macOS and Linux:
-
+### 2. Homebrew (macOS / Linux)
+The standard for Mac/Linux developers:
 ```bash
 brew tap ITProfessional-Gen01/a8s-cli
 brew install a8s-cli
 ```
 
-Run it with:
+### 3. Go Install
+For Go developers:
+```bash
+go install github.com/ITProfessional-Gen01/a8s-cli@latest
+```
 
+## Running the CLI
+
+If you installed it globally using the commands above, just run:
 ```bash
 a8s-cli
 ```
 
-### Go Install
-
-For Go developers, install from the current Go module:
-
-```bash
-go install github.com/PorKeat/a8s-tui@latest
-```
-
-Run it with:
-
-```bash
-a8s-tui
-```
-
-If you want the local binary name to be `a8s-cli`, build it explicitly:
-
-```bash
-go build -o a8s-cli .
-./a8s-cli
-```
-
-## Running Locally
-
-From this repository:
-
+If you are developing locally, run:
 ```bash
 go run main.go
-```
-
-Or build and run:
-
-```bash
-go build -o a8s-cli .
-./a8s-cli
-```
-
-If you installed through NPM, PNPM, Yarn, Bun, or Homebrew, use:
-
-```bash
-a8s-cli
 ```
 
 ## Features

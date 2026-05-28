@@ -1,9 +1,11 @@
 package ui
 
 import (
-	"github.com/PorKeat/a8s-tui/api"
 	"fmt"
 	"strings"
+
+	"github.com/PorKeat/a8s-tui/api"
+	"github.com/PorKeat/a8s-tui/ui/features/deploy"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -33,11 +35,32 @@ func (m model) renderDashboardDatabaseDeployForm(width, height int) []string {
 	return fillStyled(lines, bgDark, width, height)
 }
 
+func (m model) renderDashboardMonolithicDeployForm(width, height int) []string {
+	lines := make([]string, 0, height)
+	header := dashboardHeader("Monolithic", "Deploy the Git project from this terminal directory.", width)
+	lines = append(lines, header...)
+	cardLines := monolithicDeployFormCard(m, width)
+	viewportHeight := max(height-len(lines), 1)
+	cardLines = scrollMonolithicFormLines(cardLines, m.monolithForm.focus, viewportHeight)
+	lines = append(lines, cardLines...)
+	return fillStyled(lines, bgDark, width, height)
+}
+
 func scrollDatabaseFormLines(lines []string, focus int, viewportHeight int) []string {
 	if len(lines) <= viewportHeight {
 		return lines
 	}
 	focusLine := databaseFormFocusLine(focus)
+	maxOffset := max(len(lines)-viewportHeight, 0)
+	offset := clamp(focusLine-viewportHeight/2, 0, maxOffset)
+	return lines[offset:min(offset+viewportHeight, len(lines))]
+}
+
+func scrollMonolithicFormLines(lines []string, focus int, viewportHeight int) []string {
+	if len(lines) <= viewportHeight {
+		return lines
+	}
+	focusLine := monolithicFormFocusLine(focus)
 	maxOffset := max(len(lines)-viewportHeight, 0)
 	offset := clamp(focusLine-viewportHeight/2, 0, maxOffset)
 	return lines[offset:min(offset+viewportHeight, len(lines))]
@@ -53,32 +76,42 @@ func databaseFormFocusLine(focus int) int {
 	return 27
 }
 
+func monolithicFormFocusLine(focus int) int {
+	if focus < 0 {
+		return 0
+	}
+	if focus <= 3 {
+		return 7 + focus*3
+	}
+	return 20
+}
+
 func deploymentFeatureCard(width int, activeIndex int) []string {
 	cardWidth := max(width-6, 30)
 	card := styleCard.Width(cardWidth)
 	title := mainTitleStyle(colorBgCard)
 	mutedStyle := mainMutedStyle(colorBgCard)
 	readyCount := 0
-	for _, feature := range deploymentFeatures {
-		if feature.ready {
+	for _, feature := range deploy.Features {
+		if feature.Ready {
 			readyCount++
 		}
 	}
-	summary := fmt.Sprintf("%d ready / %d soon", readyCount, max(len(deploymentFeatures)-readyCount, 0))
+	summary := fmt.Sprintf("%d ready / %d soon", readyCount, max(len(deploy.Features)-readyCount, 0))
 	lines := []string{
 		cardContentLine(card, "", width),
 		cardContentLine(card, "  "+title.Render("Choose deployment type")+mutedStyle.Render("  "+summary), width),
 		cardContentLine(card, "  "+mutedStyle.Render("Move with arrows or j/k. Enter opens selection."), width),
 		cardContentLine(card, "", width),
 	}
-	for index, feature := range deploymentFeatures {
+	for index, feature := range deploy.Features {
 		lines = append(lines, deploymentFeatureBox(card, cardWidth, width, feature, index == activeIndex)...)
 	}
 	lines = append(lines, cardContentLine(card, "", width))
 	return lines
 }
 
-func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature deploymentFeature, active bool) []string {
+func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature deploy.Feature, active bool) []string {
 	rowBg := lipgloss.Color(colorBgCard)
 	border := lipgloss.Color(colorBorder)
 	labelStyle := mainBodyStyle(colorBgCard)
@@ -92,11 +125,11 @@ func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature dep
 		markerStyle = mainPrimaryStyle(colorBgCard)
 		marker = "▌"
 	}
-	if feature.ready {
+	if feature.Ready {
 		statusStyle = mainPrimaryStyle(colorBgCard)
 	}
-	description := feature.description
-	if !feature.ready {
+	description := feature.Description
+	if !feature.Ready {
 		description += " Coming soon."
 	}
 	boxWidth := max(cardWidth-6, 32)
@@ -107,10 +140,10 @@ func deploymentFeatureBox(card lipgloss.Style, cardWidth, width int, feature dep
 		labelWidth = 18
 	}
 	descWidth := max(contentWidth-labelWidth-statusWidth-6, 8)
-	status := deploymentStatusText(feature.ready)
+	status := deploymentStatusText(feature.Ready)
 	content := markerStyle.Render(marker) +
 		mainBodyStyle(colorBgCard).Render("  ") +
-		labelStyle.Render(pad(truncatePlain(feature.label, labelWidth), labelWidth)) +
+		labelStyle.Render(pad(truncatePlain(feature.Label, labelWidth), labelWidth)) +
 		mainBodyStyle(colorBgCard).Render("  ") +
 		mutedStyle.Render(pad(truncatePlain(description, descWidth), descWidth)) +
 		mainBodyStyle(colorBgCard).Render("  ") +
@@ -157,7 +190,7 @@ func databaseDeployFormCard(m model, width int) []string {
 		value string
 	}{
 		{0, "Project name", m.dbForm.projectName},
-		{1, "Engine", m.dbForm.engine().label},
+		{1, "Engine", m.dbForm.engine().Label},
 		{2, "Database name", m.dbForm.databaseName},
 		{3, "Username", m.dbForm.username},
 		{4, "Password", maskValue(m.dbForm.password)},
@@ -172,7 +205,51 @@ func databaseDeployFormCard(m model, width int) []string {
 	}
 	lines = append(lines, databaseDeploySubmitBox(card, cardWidth, width, m)...)
 	lines = append(lines, cardContentLine(card, "", width))
-	payload := fmt.Sprintf("Payload: %s / single-instance / %s / %s", m.dbForm.engine().id, m.dbForm.version(), m.dbForm.size())
+	payload := fmt.Sprintf("Payload: %s / single-instance / %s / %s", m.dbForm.engine().ID, m.dbForm.version(), m.dbForm.size())
+	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(payload, cardWidth-4)), width))
+	if m.message != "" {
+		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	return lines
+}
+
+func monolithicDeployFormCard(m model, width int) []string {
+	cardWidth := max(width-6, 42)
+	card := styleCard.Width(cardWidth)
+	title := mainTitleStyle(colorBgCard)
+	bodyStyle := mainBodyStyle(colorBgCard)
+	mutedStyle := mainMutedStyle(colorBgCard)
+	directory := truncatePlain(m.monolithForm.directory, cardWidth-16)
+	if directory == "" {
+		directory = "."
+	}
+	lines := []string{
+		cardContentLine(card, "", width),
+		cardContentLine(card, "  "+title.Render("Deploy Project")+bodyStyle.Render("  ")+mutedStyle.Render("current directory"), width),
+		cardContentLine(card, "  "+mutedStyle.Render("Vercel-style deploy from Git. Enter submits on Deploy."), width),
+		cardContentLine(card, "  "+mutedStyle.Render("Directory: ")+bodyStyle.Render(directory), width),
+		cardContentLine(card, "", width),
+	}
+	fields := []struct {
+		index int
+		label string
+		value string
+	}{
+		{0, "Project name", m.monolithForm.projectName},
+		{1, "Git remote", m.monolithForm.repoURL},
+		{2, "Branch", m.monolithForm.branch},
+		{3, "App port", m.monolithForm.appPort},
+	}
+	for _, field := range fields {
+		lines = append(lines, monolithicDeployFieldBox(card, cardWidth, width, m, field.index, field.label, field.value)...)
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, monolithicDeploySubmitBox(card, cardWidth, width, m)...)
+	lines = append(lines, cardContentLine(card, "", width))
+	repoFullName := firstNonEmpty(m.monolithForm.repoFullName, "unknown repository")
+	framework := firstNonEmpty(m.monolithForm.framework, "auto")
+	payload := fmt.Sprintf("Detected: %s / %s / %s", repoFullName, firstNonEmpty(m.monolithForm.branch, "main"), framework)
 	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(payload, cardWidth-4)), width))
 	if m.message != "" {
 		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
@@ -183,6 +260,48 @@ func databaseDeployFormCard(m model, width int) []string {
 
 func databaseDeployFieldBox(card lipgloss.Style, cardWidth, width int, m model, index int, label, value string) []string {
 	active := m.dbForm.focus == index
+	if value == "" {
+		value = "..."
+	}
+	rowBg := lipgloss.Color(colorBgCard)
+	border := lipgloss.Color(colorBorder)
+	labelStyle := mainMutedStyle(colorBgCard)
+	valueStyle := mainBodyStyle(colorBgCard)
+	prefixStyle := mainBodyStyle(colorBgCard)
+	prefix := "  "
+	if active {
+		border = lipgloss.Color(colorPrimary)
+		labelStyle = mainPrimaryStyle(colorBgCard)
+		valueStyle = mainTitleStyle(colorBgCard)
+		prefixStyle = mainPrimaryStyle(colorBgCard)
+		prefix = "> "
+	}
+	boxWidth := max(cardWidth-4, 24)
+	labelWidth := 16
+	valueWidth := max(boxWidth-labelWidth-8, 8)
+	content := prefixStyle.Render(prefix) +
+		labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		valueStyle.Render(truncatePlain(value, valueWidth))
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Render(content)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
+func monolithicDeployFieldBox(card lipgloss.Style, cardWidth, width int, m model, index int, label, value string) []string {
+	active := m.monolithForm.focus == index
 	if value == "" {
 		value = "..."
 	}
@@ -249,6 +368,32 @@ func databaseDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model)
 	return lines
 }
 
+func monolithicDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model) []string {
+	active := m.monolithForm.focus == 4
+	rowBg := lipgloss.Color(colorBgCard)
+	border := lipgloss.Color(colorBorder)
+	labelStyle := mainBodyStyle(colorBgCard)
+	if active {
+		border = lipgloss.Color(colorPrimary)
+		labelStyle = mainPrimaryStyle(colorBgCard)
+	}
+	label := labelStyle.Render("Deploy")
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Padding(0, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Render(label)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
 func (m model) databaseDeployView(width, height int) tea.View {
 	contentWidth := min(max(width-12, 72), 104)
 	leftMargin := max((width-contentWidth)/2, 0)
@@ -258,7 +403,7 @@ func (m model) databaseDeployView(width, height int) tea.View {
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Use arrows or j/k to move. Left/right changes choices. Enter submits on Deploy."+reset)
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(0, "Project name", m.dbForm.projectName, contentWidth))
-	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(1, "Engine", m.dbForm.engine().label, contentWidth))
+	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(1, "Engine", m.dbForm.engine().Label, contentWidth))
 	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(2, "Database name", m.dbForm.databaseName, contentWidth))
 	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(3, "Username", m.dbForm.username, contentWidth))
 	lines = append(lines, spaces(leftMargin)+m.databaseFormLine(4, "Password", maskValue(m.dbForm.password), contentWidth))
@@ -267,7 +412,7 @@ func (m model) databaseDeployView(width, height int) tea.View {
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+m.databaseSubmitLine(contentWidth))
 	lines = append(lines, "")
-	lines = append(lines, spaces(leftMargin)+fgMuted+"Payload: "+reset+fgText+m.dbForm.engine().id+" / single-instance / "+m.dbForm.version()+" / "+m.dbForm.size()+reset)
+	lines = append(lines, spaces(leftMargin)+fgMuted+"Payload: "+reset+fgText+m.dbForm.engine().ID+" / single-instance / "+m.dbForm.version()+" / "+m.dbForm.size()+reset)
 	if m.message != "" {
 		lines = append(lines, spaces(leftMargin)+fgWarn+"* "+fgAccent+m.message+reset)
 	}

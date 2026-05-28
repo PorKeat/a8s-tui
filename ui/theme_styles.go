@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"os"
+	uitheme "github.com/PorKeat/a8s-tui/ui/theme"
 
 	"charm.land/lipgloss/v2"
 )
@@ -51,32 +51,18 @@ var (
 )
 
 var (
-	nfSearch       = "\uf002"
-	nfFolder       = "\uf07b"
-	nfDeploy       = "\uf0ee"
-	nfShield       = "\uf132"
-	nfFile         = "\uf15b"
-	nfChart        = "\uf080"
-	nfGear         = "\uf013"
-	nfDatabase     = "\uf1c0"
-	nfMicroservice = "\ue749"
-	nfProject      = "\ue7ba"
+	icons          = uitheme.IconSet()
+	nfSearch       = icons.Search
+	nfFolder       = icons.Folder
+	nfDeploy       = icons.Deploy
+	nfShield       = icons.Shield
+	nfFile         = icons.File
+	nfChart        = icons.Chart
+	nfGear         = icons.Gear
+	nfDatabase     = icons.Database
+	nfMicroservice = icons.Microservice
+	nfProject      = icons.Project
 )
-
-func init() {
-	if os.Getenv("A8S_NO_ICONS") == "true" {
-		nfSearch = "O"
-		nfFolder = ">"
-		nfDeploy = "^"
-		nfShield = "#"
-		nfFile = "-"
-		nfChart = "~"
-		nfGear = "*"
-		nfDatabase = "@"
-		nfMicroservice = "&"
-		nfProject = "+"
-	}
-}
 
 var (
 	styleSide = lipgloss.NewStyle().

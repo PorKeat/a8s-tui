@@ -9,6 +9,8 @@ import (
 	"github.com/PorKeat/a8s-tui/api"
 	"github.com/PorKeat/a8s-tui/auth"
 	"github.com/PorKeat/a8s-tui/config"
+	"github.com/PorKeat/a8s-tui/ui/features/deploy"
+	"github.com/PorKeat/a8s-tui/ui/features/settings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -67,6 +69,8 @@ type model struct {
 	projectDetailOpen bool
 	dbForm            databaseDeployForm
 	dbFormOpen        bool
+	monolithForm      monolithicDeployForm
+	monolithFormOpen  bool
 	deployLogOpen     bool
 	deployLog         api.DatabaseDeploymentRecord
 	deployLogOffset   int
@@ -105,6 +109,12 @@ type databaseDeploymentPollMsg struct {
 	err        error
 }
 
+type monolithicDeployResultMsg struct {
+	tokens     auth.TokenSet
+	deployment api.MonolithicDeploymentRecord
+	err        error
+}
+
 type databaseDeployForm struct {
 	focus        int
 	projectName  string
@@ -116,33 +126,15 @@ type databaseDeployForm struct {
 	sizeIndex    int
 }
 
-type databaseEngineOption struct {
-	id       string
-	label    string
-	versions []string
-}
-
-var databaseEngineOptions = []databaseEngineOption{
-	{id: "postgresql", label: "PostgreSQL", versions: []string{"18", "17", "16", "15"}},
-	{id: "mysql", label: "MySQL", versions: []string{"8.4", "8.0"}},
-	{id: "mongodb", label: "MongoDB", versions: []string{"8.0", "7.0"}},
-	{id: "redis", label: "Redis", versions: []string{"8.0", "7.2"}},
-	{id: "cassandra", label: "Cassandra", versions: []string{"5.0.5", "4.1.3"}},
-}
-
-var databaseSizeOptions = []string{"small", "medium", "large"}
-
-type deploymentFeature struct {
-	label       string
-	description string
-	ready       bool
-}
-
-var deploymentFeatures = []deploymentFeature{
-	{label: "Single database", description: "Create a single-instance database deployment.", ready: true},
-	{label: "Database cluster", description: "Prepare highly available database clusters.", ready: false},
-	{label: "Monolithic", description: "Deploy monolithic applications from a repository.", ready: false},
-	{label: "Microservices", description: "Deploy service groups with independent releases.", ready: false},
+type monolithicDeployForm struct {
+	focus        int
+	projectName  string
+	repoURL      string
+	repoFullName string
+	branch       string
+	appPort      string
+	framework    string
+	directory    string
 }
 
 func initialModel(config config.AppConfig, configErr error) model {
@@ -161,14 +153,15 @@ func initialModel(config config.AppConfig, configErr error) model {
 			spinner.WithSpinner(spinner.MiniDot),
 			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#f56618"))),
 		),
-		dbForm:   newDatabaseDeployForm(),
-		state:    state,
-		width:    118,
-		height:   36,
-		page:     pageProjects,
-		focus:    focusList,
-		darkMode: true,
-		message:  message,
+		dbForm:       newDatabaseDeployForm(),
+		monolithForm: newMonolithicDeployForm(),
+		state:        state,
+		width:        118,
+		height:       36,
+		page:         pageProjects,
+		focus:        focusList,
+		darkMode:     true,
+		message:      message,
 	}
 }
 
@@ -274,6 +267,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.message = "Deployment is still running..."
 		return m, m.fetchDatabaseDeploymentCmd(m.deployLog.ID, 2*time.Second)
+	case monolithicDeployResultMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.state = stateReady
+			m.monolithFormOpen = true
+			m.message = "Monolithic deployment failed: " + msg.err.Error()
+			return m, nil
+		}
+		name := firstNonEmpty(msg.deployment.Name, m.monolithForm.projectName, "monolith")
+		m.monolithFormOpen = false
+		m.monolithForm = newMonolithicDeployForm()
+		m.state = stateLoading
+		if msg.deployment.QueueItemID > 0 {
+			m.message = fmt.Sprintf("Monolithic deployment queued: %s (#%d)", name, msg.deployment.QueueItemID)
+		} else {
+			m.message = "Monolithic deployment queued: " + name
+		}
+		return m, m.fetchProjectsCmd()
 	}
 	return m, nil
 }
@@ -284,6 +297,9 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.dbFormOpen {
 		return m.updateDatabaseDeployForm(msg)
+	}
+	if m.monolithFormOpen {
+		return m.updateMonolithicDeployForm(msg)
 	}
 	if m.projectDetailOpen {
 		return m.updateProjectDetail(msg)
@@ -442,6 +458,19 @@ func newDatabaseDeployForm() databaseDeployForm {
 	}
 }
 
+func newMonolithicDeployForm() monolithicDeployForm {
+	local := deploy.DetectLocalProject()
+	return monolithicDeployForm{
+		projectName:  local.Name,
+		repoURL:      local.RepoURL,
+		repoFullName: local.RepoFullName,
+		branch:       local.Branch,
+		appPort:      fmt.Sprintf("%d", local.AppPort),
+		framework:    local.Framework,
+		directory:    local.Directory,
+	}
+}
+
 func (m model) updateDatabaseDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	code := msg.Key().Code
@@ -481,15 +510,46 @@ func (m model) updateDatabaseDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
+func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
+	fieldCount := 5
+
+	switch {
+	case key == "ctrl+c":
+		return m, tea.Quit
+	case key == "esc" || code == tea.KeyEscape:
+		m.monolithFormOpen = false
+		m.message = "Monolithic deployment canceled"
+	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown || key == "j":
+		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
+	case code == tea.KeyUp || key == "k":
+		m.monolithForm.focus = (m.monolithForm.focus + fieldCount - 1) % fieldCount
+	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
+		m.deleteMonolithicFormRune()
+	case isEnter:
+		if m.monolithForm.focus == fieldCount-1 {
+			return m.submitMonolithicDeployment()
+		}
+		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
+	default:
+		if len(key) == 1 && key >= " " && key <= "~" {
+			m.appendMonolithicFormText(key)
+		}
+	}
+	return m, nil
+}
+
 func (m *model) adjustDatabaseChoice(delta int) {
 	switch m.dbForm.focus {
 	case 1:
-		m.dbForm.engineIndex = wrapIndex(m.dbForm.engineIndex+delta, len(databaseEngineOptions))
+		m.dbForm.engineIndex = wrapIndex(m.dbForm.engineIndex+delta, len(deploy.EngineOptions))
 		m.dbForm.versionIndex = 0
 	case 5:
-		m.dbForm.versionIndex = wrapIndex(m.dbForm.versionIndex+delta, len(m.dbForm.engine().versions))
+		m.dbForm.versionIndex = wrapIndex(m.dbForm.versionIndex+delta, len(m.dbForm.engine().Versions))
 	case 6:
-		m.dbForm.sizeIndex = wrapIndex(m.dbForm.sizeIndex+delta, len(databaseSizeOptions))
+		m.dbForm.sizeIndex = wrapIndex(m.dbForm.sizeIndex+delta, len(deploy.SizeOptions))
 	}
 }
 
@@ -516,6 +576,32 @@ func (m *model) deleteDatabaseFormRune() {
 		m.dbForm.username = trimLastRune(m.dbForm.username)
 	case 4:
 		m.dbForm.password = trimLastRune(m.dbForm.password)
+	}
+}
+
+func (m *model) appendMonolithicFormText(text string) {
+	switch m.monolithForm.focus {
+	case 0:
+		m.monolithForm.projectName += text
+	case 1:
+		m.monolithForm.repoURL += text
+	case 2:
+		m.monolithForm.branch += text
+	case 3:
+		m.monolithForm.appPort += text
+	}
+}
+
+func (m *model) deleteMonolithicFormRune() {
+	switch m.monolithForm.focus {
+	case 0:
+		m.monolithForm.projectName = trimLastRune(m.monolithForm.projectName)
+	case 1:
+		m.monolithForm.repoURL = trimLastRune(m.monolithForm.repoURL)
+	case 2:
+		m.monolithForm.branch = trimLastRune(m.monolithForm.branch)
+	case 3:
+		m.monolithForm.appPort = trimLastRune(m.monolithForm.appPort)
 	}
 }
 
@@ -548,6 +634,38 @@ func (m model) submitDatabaseDeployment() (tea.Model, tea.Cmd) {
 			deployment, err = projectsAPI.CreateDatabaseDeployment(ctx, tokens.AccessToken, input)
 		}
 		return databaseDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
+	}
+}
+
+func (m model) submitMonolithicDeployment() (tea.Model, tea.Cmd) {
+	input, err := m.monolithForm.input()
+	if err != nil {
+		m.message = err.Error()
+		return m, nil
+	}
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	m.message = "Submitting monolithic deployment..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return monolithicDeployResultMsg{tokens: tokens, err: err}
+			}
+		}
+		deployment, err := projectsAPI.CreateMonolithicDeployment(ctx, tokens.AccessToken, input)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return monolithicDeployResultMsg{tokens: tokens, err: err}
+			}
+			deployment, err = projectsAPI.CreateMonolithicDeployment(ctx, tokens.AccessToken, input)
+		}
+		return monolithicDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
 	}
 }
 
@@ -590,17 +708,17 @@ func (m model) updateProjectDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (f databaseDeployForm) engine() databaseEngineOption {
-	return databaseEngineOptions[clamp(f.engineIndex, 0, len(databaseEngineOptions)-1)]
+func (f databaseDeployForm) engine() deploy.EngineOption {
+	return deploy.EngineOptions[clamp(f.engineIndex, 0, len(deploy.EngineOptions)-1)]
 }
 
 func (f databaseDeployForm) version() string {
-	versions := f.engine().versions
+	versions := f.engine().Versions
 	return versions[clamp(f.versionIndex, 0, len(versions)-1)]
 }
 
 func (f databaseDeployForm) size() string {
-	return databaseSizeOptions[clamp(f.sizeIndex, 0, len(databaseSizeOptions)-1)]
+	return deploy.SizeOptions[clamp(f.sizeIndex, 0, len(deploy.SizeOptions)-1)]
 }
 
 func (f databaseDeployForm) input() (api.CreateDatabaseDeploymentInput, error) {
@@ -622,13 +740,37 @@ func (f databaseDeployForm) input() (api.CreateDatabaseDeploymentInput, error) {
 	}
 	return api.CreateDatabaseDeploymentInput{
 		ProjectName:    projectName,
-		Engine:         f.engine().id,
+		Engine:         f.engine().ID,
 		DeploymentMode: "single-instance",
 		DatabaseName:   databaseName,
 		Username:       username,
 		Password:       password,
 		Version:        f.version(),
 		SizeProfile:    f.size(),
+	}, nil
+}
+
+func (f monolithicDeployForm) input() (api.CreateMonolithicDeploymentInput, error) {
+	projectName := strings.TrimSpace(f.projectName)
+	repoURL := strings.TrimSpace(f.repoURL)
+	branch := strings.TrimSpace(f.branch)
+	if projectName == "" {
+		return api.CreateMonolithicDeploymentInput{}, fmt.Errorf("Project name is required")
+	}
+	if repoURL == "" {
+		return api.CreateMonolithicDeploymentInput{}, fmt.Errorf("Git remote URL is required")
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	return api.CreateMonolithicDeploymentInput{
+		ProjectName:       projectName,
+		RepoURL:           repoURL,
+		RepoFullName:      strings.TrimSpace(f.repoFullName),
+		Branch:            branch,
+		AppPort:           deploy.ParsePositiveInt(f.appPort, 3000),
+		ArchitectureType:  "monolithic",
+		AutoDeployEnabled: false,
 	}, nil
 }
 
@@ -671,10 +813,17 @@ func (m model) activateNavigationItem() (tea.Model, tea.Cmd) {
 
 func (m model) activateDeploymentFeature() (tea.Model, tea.Cmd) {
 	feature := m.selectedDeploymentFeature()
-	if feature.ready {
+	if !feature.Ready {
+		m.message = feature.Label + " deployment is coming soon"
+		return m, nil
+	}
+	if feature.Label == "Single database" {
 		return m.openDatabaseDeployForm(), nil
 	}
-	m.message = feature.label + " deployment is coming soon"
+	if feature.Label == "Monolithic" {
+		return m.openMonolithicDeployForm(), nil
+	}
+	m.message = feature.Label + " deployment is coming soon"
 	return m, nil
 }
 
@@ -691,14 +840,30 @@ func (m model) openProjectDetail() (tea.Model, tea.Cmd) {
 func (m model) openDatabaseDeployForm() model {
 	m.navCursor = m.navigationIndexByPage(pageDeployment)
 	m.dbFormOpen = true
+	m.monolithFormOpen = false
 	m.dbForm = newDatabaseDeployForm()
 	m.message = "Create a single-instance database deployment"
+	return m
+}
+
+func (m model) openMonolithicDeployForm() model {
+	m.navCursor = m.navigationIndexByPage(pageDeployment)
+	m.dbFormOpen = false
+	m.monolithFormOpen = true
+	m.monolithForm = newMonolithicDeployForm()
+	if m.monolithForm.repoURL == "" {
+		m.message = "No Git origin detected. Enter a repository URL before deploying."
+	} else {
+		m.message = "Deploy the current project from Git"
+	}
 	return m
 }
 
 func (m *model) setPage(page appPage) {
 	m.page = page
 	m.projectDetailOpen = false
+	m.dbFormOpen = false
+	m.monolithFormOpen = false
 	m.navCursor = m.navigationIndexByPage(page)
 	if page == pageDeployment {
 		m.deployCursor = 0
@@ -716,10 +881,7 @@ func (m *model) toggleTheme() {
 }
 
 func (m model) themeLabel() string {
-	if m.darkMode {
-		return "Dark mode"
-	}
-	return "Light mode"
+	return settings.ThemeLabel(m.darkMode)
 }
 
 func (m model) logout() (tea.Model, tea.Cmd) {
@@ -729,10 +891,12 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.projects = nil
 	m.projectDetailOpen = false
 	m.dbFormOpen = false
+	m.monolithFormOpen = false
 	m.deployLogOpen = false
 	m.deployLog = api.DatabaseDeploymentRecord{}
 	m.deployLogOffset = 0
 	m.dbForm = newDatabaseDeployForm()
+	m.monolithForm = newMonolithicDeployForm()
 	m.cursor = 0
 	m.deployCursor = 0
 	m.filter = ""
@@ -809,14 +973,14 @@ func (m *model) moveNavigationCursor(delta int) {
 }
 
 func (m *model) moveDeploymentCursor(delta int) {
-	m.deployCursor = clamp(m.deployCursor+delta, 0, max(len(deploymentFeatures)-1, 0))
+	m.deployCursor = clamp(m.deployCursor+delta, 0, max(len(deploy.Features)-1, 0))
 }
 
-func (m model) selectedDeploymentFeature() deploymentFeature {
-	if len(deploymentFeatures) == 0 {
-		return deploymentFeature{}
+func (m model) selectedDeploymentFeature() deploy.Feature {
+	if len(deploy.Features) == 0 {
+		return deploy.Feature{}
 	}
-	return deploymentFeatures[clamp(m.deployCursor, 0, len(deploymentFeatures)-1)]
+	return deploy.Features[clamp(m.deployCursor, 0, len(deploy.Features)-1)]
 }
 
 func (m model) focusAreaCount() int {
@@ -915,7 +1079,6 @@ func wrapIndex(index, length int) int {
 func trimLastRune(value string) string {
 	runes := []rune(value)
 	if len(runes) == 0 {
-		return value
 	}
 	return string(runes[:len(runes)-1])
 }

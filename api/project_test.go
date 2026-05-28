@@ -197,6 +197,65 @@ func TestCreateDatabaseDeployment(t *testing.T) {
 	}
 }
 
+func TestCreateMonolithicDeployment(t *testing.T) {
+	var sawProfile bool
+	var sawCreate bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/v1/profile/me":
+			sawProfile = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"userId": "user-1"})
+		case "/api/v1/projects":
+			sawCreate = true
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %q", r.Method)
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["userId"] != "user-1" || payload["projectName"] != "web" || payload["repoUrl"] != "https://github.com/team/web.git" {
+				t.Fatalf("payload = %#v", payload)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projectId":      "project-1",
+				"name":           "web",
+				"status":         "CREATED",
+				"deployUrl":      "https://web.example.com",
+				"queueItemId":    float64(42),
+				"jenkinsJobName": "deploy-monolith",
+			})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	deployment, err := client.CreateMonolithicDeployment(context.Background(), "access", CreateMonolithicDeploymentInput{
+		ProjectName:      "web",
+		RepoURL:          "https://github.com/team/web.git",
+		RepoFullName:     "team/web",
+		Branch:           "main",
+		AppPort:          3000,
+		ArchitectureType: "monolithic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawProfile || !sawCreate {
+		t.Fatalf("expected profile and create calls")
+	}
+	if deployment.ProjectID != "project-1" || deployment.QueueItemID != 42 {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
 func TestFetchDatabaseDeployment(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/database-deployments/db-1" {
@@ -241,7 +300,6 @@ func TestParseDeploymentLogLines(t *testing.T) {
 		}
 	}
 }
-
 
 func TestFetchBackendUserID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

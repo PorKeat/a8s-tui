@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	projectfeature "github.com/PorKeat/a8s-tui/ui/features/projects"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -52,7 +54,7 @@ func (m model) renderSidebar(width, height int) []string {
 	}
 
 	if m.page == pageProjects {
-		counts := m.kindCounts()
+		counts := projectfeature.KindCounts(m.projects)
 		lines = append(lines, bgPane+pad("", width)+reset)
 		lines = append(lines, sectionLine("project counts", width))
 		rows := []struct {
@@ -127,21 +129,21 @@ func sidebarBrand(width int) []string {
 		Foreground(lipgloss.Color(colorTitle)).
 		Bold(true).
 		Render("A 8 S   ")
-		
+
 	part2 := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorBgSide)).
 		Foreground(lipgloss.Color(colorPrimary)).
 		Bold(true).
 		Render("A U T O N O M O U S")
-		
+
 	line := styleSide.Render("  ") + part1 + part2
-	
+
 	rule := styleSide.Render("  ") +
 		lipgloss.NewStyle().
 			Background(lipgloss.Color(colorBgSide)).
 			Foreground(lipgloss.Color(colorBorder)).
 			Render(strings.Repeat("─", max(width-4, 1)))
-			
+
 	return []string{
 		sideContentLine("", width),
 		sideContentLine(line, width),

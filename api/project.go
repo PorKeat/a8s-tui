@@ -63,6 +63,28 @@ type CreateDatabaseDeploymentInput struct {
 	SizeProfile    string `json:"sizeProfile"`
 }
 
+type CreateMonolithicDeploymentInput struct {
+	ProjectName       string `json:"projectName"`
+	RepoURL           string `json:"repoUrl"`
+	RepoFullName      string `json:"repoFullName,omitempty"`
+	Branch            string `json:"branch,omitempty"`
+	AppPort           int    `json:"appPort,omitempty"`
+	ArchitectureType  string `json:"architectureType"`
+	AutoDeployEnabled bool   `json:"autoDeployEnabled,omitempty"`
+}
+
+type MonolithicDeploymentRecord struct {
+	ProjectID         string
+	Name              string
+	Status            string
+	RepoProvider      string
+	DeployURL         string
+	QueueURL          string
+	QueueItemID       int
+	JenkinsJobName    string
+	AutoDeployEnabled bool
+}
+
 type DatabaseDeploymentRecord struct {
 	ID                    string
 	ReleaseName           string
@@ -219,6 +241,62 @@ func (c ProjectClient) CreateDatabaseDeployment(
 	return normalizeDatabaseDeployment(payload), nil
 }
 
+func (c ProjectClient) CreateMonolithicDeployment(
+	ctx context.Context,
+	token string,
+	input CreateMonolithicDeploymentInput,
+) (MonolithicDeploymentRecord, error) {
+	backendUserID, _, err := c.fetchBackendUserID(ctx, token)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/projects")
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	body := map[string]any{
+		"userId":           backendUserID,
+		"projectName":      strings.TrimSpace(input.ProjectName),
+		"repoUrl":          strings.TrimSpace(input.RepoURL),
+		"repoFullName":     strings.TrimSpace(input.RepoFullName),
+		"branch":           strings.TrimSpace(input.Branch),
+		"architectureType": firstNonEmpty(strings.TrimSpace(input.ArchitectureType), "monolithic"),
+	}
+	if input.AppPort > 0 {
+		body["appPort"] = input.AppPort
+	}
+	if input.AutoDeployEnabled {
+		body["autoDeployEnabled"] = true
+	}
+	payloadBytes, err := json.Marshal(body)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return MonolithicDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return MonolithicDeploymentRecord{}, fmt.Errorf("decode monolithic deployment response: %w", err)
+	}
+	return normalizeMonolithicDeployment(payload), nil
+}
+
 func (c ProjectClient) FetchDatabaseDeployment(ctx context.Context, token, deploymentID string) (DatabaseDeploymentRecord, error) {
 	if strings.TrimSpace(deploymentID) == "" {
 		return DatabaseDeploymentRecord{}, errors.New("database deployment id is required")
@@ -291,7 +369,7 @@ func (c ProjectClient) fetchBackendUserID(ctx context.Context, token string) (st
 			userName = strings.TrimSpace(firstName + " " + lastName)
 		}
 	}
-	
+
 	return userID, userName, nil
 }
 
@@ -404,6 +482,20 @@ func normalizeDatabaseDeployment(payload map[string]any) DatabaseDeploymentRecor
 		Status:                readString(payload["status"]),
 		StatusMessage:         readString(payload["statusMessage"]),
 		StatusLog:             readString(payload["statusLog"]),
+	}
+}
+
+func normalizeMonolithicDeployment(payload map[string]any) MonolithicDeploymentRecord {
+	return MonolithicDeploymentRecord{
+		ProjectID:         readString(payload["projectId"]),
+		Name:              readString(payload["name"]),
+		Status:            readString(payload["status"]),
+		RepoProvider:      readString(payload["repoProvider"]),
+		DeployURL:         readString(payload["deployUrl"]),
+		QueueURL:          readString(payload["queueUrl"]),
+		QueueItemID:       readInt(payload["queueItemId"]),
+		JenkinsJobName:    readString(payload["jenkinsJobName"]),
+		AutoDeployEnabled: readBool(payload["autoDeployEnabled"]),
 	}
 }
 

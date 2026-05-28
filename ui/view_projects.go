@@ -1,9 +1,12 @@
 package ui
 
 import (
-	"github.com/PorKeat/a8s-tui/api"
 	"fmt"
 	"strings"
+
+	"github.com/PorKeat/a8s-tui/api"
+	"github.com/PorKeat/a8s-tui/ui/components"
+	projectfeature "github.com/PorKeat/a8s-tui/ui/features/projects"
 
 	"charm.land/lipgloss/v2"
 )
@@ -23,7 +26,7 @@ func projectIcon(project api.LiveProject) string {
 
 func (m model) renderDashboardProjects(width, height int) []string {
 	lines := make([]string, 0, height)
-	counts := m.kindCounts()
+	counts := projectfeature.KindCounts(m.projects)
 	lines = append(lines, dashboardHeader(
 		"Project workspace",
 		"Real database deployments, monolith apps, and microservice workspaces in your workspace.",
@@ -94,7 +97,7 @@ func projectOverviewCard(project api.LiveProject, width int) []string {
 	title := mainTitleStyle(colorBgCard)
 	body := mainBodyStyle(colorBgCard)
 	muted := mainMutedStyle(colorBgCard)
-	status := projectStatusLabel(project)
+	status := projectfeature.StatusLabel(project)
 	subtitle := joinNonEmpty(project.Engine, project.DeploymentMode, "version "+project.Version)
 	if subtitle == "" {
 		subtitle = firstNonEmpty(project.Kind, "project")
@@ -303,14 +306,6 @@ func projectBackupCard(width int) []string {
 	return repairCardLines(lines)
 }
 
-func projectStatusLabel(project api.LiveProject) string {
-	status := strings.TrimSpace(project.Status)
-	if status == "" {
-		return "Unknown"
-	}
-	return status
-}
-
 func dashboardProjectRow(project api.LiveProject, width int, active bool) string {
 	rowBg := colorBgCard
 	nameStyle := mainBodyStyle(rowBg)
@@ -511,18 +506,7 @@ func (m model) renderDetail(width, height int) []string {
 }
 
 func truncatePlain(text string, width int) string {
-	text = strings.TrimSpace(text)
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) <= width {
-		return text
-	}
-	if width <= 1 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-1]) + "."
+	return components.TruncatePlain(strings.TrimSpace(text), width)
 }
 
 func firstNonEmpty(values ...string) string {
