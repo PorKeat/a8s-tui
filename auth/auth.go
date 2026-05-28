@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"github.com/ITProfessional-Gen01/a8s-cli/config"
+	"github.com/PorKeat/a8s-tui/config"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"

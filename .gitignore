@@ -15,6 +15,7 @@ node_modules/
 
 # Go compiled binaries
 a8s-cli
+a8s-tui
 dist/
 coverage.out
 .release_version

@@ -1,7 +1,7 @@
 package ui
 
 import (
-	uitheme "github.com/ITProfessional-Gen01/a8s-cli/ui/theme"
+	uitheme "github.com/PorKeat/a8s-tui/ui/theme"
 
 	"charm.land/lipgloss/v2"
 )

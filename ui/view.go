@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ITProfessional-Gen01/a8s-cli/ui/components"
-	uitheme "github.com/ITProfessional-Gen01/a8s-cli/ui/theme"
+	"github.com/PorKeat/a8s-tui/ui/components"
+	uitheme "github.com/PorKeat/a8s-tui/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"

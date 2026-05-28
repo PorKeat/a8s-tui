@@ -3,7 +3,7 @@ package projects
 import (
 	"strings"
 
-	"github.com/ITProfessional-Gen01/a8s-cli/api"
+	"github.com/PorKeat/a8s-tui/api"
 )
 
 func KindCounts(items []api.LiveProject) map[string]int {

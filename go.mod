@@ -1,4 +1,4 @@
-module github.com/ITProfessional-Gen01/a8s-cli
+module github.com/PorKeat/a8s-tui
 
 go 1.26.3
 
@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/lipgloss/v2 v2.0.2
 )
+
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect

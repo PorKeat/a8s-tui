@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"github.com/ITProfessional-Gen01/a8s-cli/config"
+	"github.com/PorKeat/a8s-tui/config"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -27,7 +27,7 @@ func TestBuildLoginURL(t *testing.T) {
 		config: config.AppConfig{
 			KeycloakURL:         "https://keycloak.example.com",
 			KeycloakRealm:       "a8s",
-			KeycloakClientID:    "a8s-cli",
+			KeycloakClientID:    "a8s-tui",
 			KeycloakRedirectURL: "http://localhost:8250/callback",
 		},
 	}
@@ -46,7 +46,7 @@ func TestBuildLoginURL(t *testing.T) {
 	query := parsed.Query()
 	for key, expected := range map[string]string{
 		"response_type":         "code",
-		"client_id":             "a8s-cli",
+		"client_id":             "a8s-tui",
 		"redirect_uri":          "http://localhost:8250/callback",
 		"scope":                 "openid profile email",
 		"prompt":                "login select_account",
@@ -66,7 +66,7 @@ func TestBuildLogoutURL(t *testing.T) {
 		config: config.AppConfig{
 			KeycloakURL:      "https://keycloak.example.com",
 			KeycloakRealm:    "a8s",
-			KeycloakClientID: "a8s-cli",
+			KeycloakClientID: "a8s-tui",
 		},
 	}
 
@@ -82,7 +82,7 @@ func TestBuildLogoutURL(t *testing.T) {
 		t.Fatalf("path = %q", parsed.Path)
 	}
 	query := parsed.Query()
-	if query.Get("client_id") != "a8s-cli" {
+	if query.Get("client_id") != "a8s-tui" {
 		t.Fatalf("client_id = %q", query.Get("client_id"))
 	}
 	if query.Get("id_token_hint") != "id-token" {

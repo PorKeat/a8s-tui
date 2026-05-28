@@ -49,7 +49,7 @@ brews:
       # owner and name will be automatically detected from the remote
       token: "{{ .Env.GITHUB_TOKEN }}"
     directory: HomebrewFormula
-    homepage: "https://github.com/ITProfessional-Gen01/a8s-cli"
+    homepage: "https://github.com/PorKeat/a8s-tui"
     description: "The official CLI for Autonomous 8s"
     test: |
       system "#{bin}/a8s-cli --version"
