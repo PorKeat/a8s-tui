@@ -1,5 +1,6 @@
 pipeline {
-    agent none
+    // Run directly on the Jenkins server host machine (no Docker required)
+    agent any
 
     environment {
         // These credentials must be configured in Jenkins
@@ -9,7 +10,6 @@ pipeline {
 
     stages {
         stage('Initialize Git') {
-            agent any
             steps {
                 // Ensure all tags are fetched so GoReleaser and npm version work
                 sh 'git fetch --tags'
@@ -18,11 +18,6 @@ pipeline {
 
         stage('Build & Test (Main Branch)') {
             when { branch 'main' }
-            agent {
-                docker { 
-                    image 'golang:latest' 
-                }
-            }
             steps {
                 sh 'go build .'
                 sh 'go test ./...'
@@ -33,22 +28,12 @@ pipeline {
             when { buildingTag() }
             stages {
                 stage('Release Go Binaries') {
-                    agent {
-                        docker { 
-                            image 'goreleaser/goreleaser:v2' 
-                        }
-                    }
                     steps {
                         sh 'goreleaser release --clean'
                     }
                 }
                 
                 stage('Publish to NPM') {
-                    agent {
-                        docker { 
-                            image 'node:20' 
-                        }
-                    }
                     steps {
                         sh 'npm ci'
                         sh '''
