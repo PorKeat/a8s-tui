@@ -5,20 +5,20 @@
 class A8sCli < Formula
   desc "The official CLI for Autonomous 8s"
   homepage "https://github.com/PorKeat/a8s-tui"
-  version "1.1.8"
+  version "1.1.9"
 
   on_macos do
     on_intel do
-      url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.8/a8s-cli_darwin_amd64.tar.gz"
-      sha256 "5c2f2ed107825bf6a28afa729f363ffc554e87d3e27922d9c30e4c20a37a307d"
+      url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.9/a8s-cli_darwin_amd64.tar.gz"
+      sha256 "48a70f05b12b28d1242e5fbd86c2f77d582dce4013b2a54e8f3375de405ce75c"
 
       def install
         bin.install "a8s-cli"
       end
     end
     on_arm do
-      url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.8/a8s-cli_darwin_arm64.tar.gz"
-      sha256 "38a15662f5097bce4e8a787d4e63637dee289617e8be03238152d40ac4b585c2"
+      url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.9/a8s-cli_darwin_arm64.tar.gz"
+      sha256 "2361e0e884403f9647549e4287f1a4415379e6951f8e3e959d28f4d894683371"
 
       def install
         bin.install "a8s-cli"
@@ -29,8 +29,8 @@ class A8sCli < Formula
   on_linux do
     on_intel do
       if Hardware::CPU.is_64_bit?
-        url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.8/a8s-cli_linux_amd64.tar.gz"
-        sha256 "23407a74105ec6a001189b52282f6a5a631da34885089bdee093021508acd0f7"
+        url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.9/a8s-cli_linux_amd64.tar.gz"
+        sha256 "40bf17dd9e85c767731400a796c05b1d5fbc4e32acef0233d643def0447f5580"
 
         def install
           bin.install "a8s-cli"
@@ -39,8 +39,8 @@ class A8sCli < Formula
     end
     on_arm do
       if Hardware::CPU.is_64_bit?
-        url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.8/a8s-cli_linux_arm64.tar.gz"
-        sha256 "68a40ca718fd304a50a2c72ba89647b5a7a05d92c8255b8552756aa8733f3bab"
+        url "https://github.com/PorKeat/a8s-tui/releases/download/v1.1.9/a8s-cli_linux_arm64.tar.gz"
+        sha256 "ffc081e120329ffe13de73005b4d6fc1913c3b60346af008fdd8551be9b9003a"
 
         def install
           bin.install "a8s-cli"
