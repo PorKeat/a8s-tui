@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/PorKeat/a8s-tui/api"
-	"github.com/PorKeat/a8s-tui/ui/features/deploy"
+	"github.com/ITProfessional-Gen01/a8s-cli/api"
+	"github.com/ITProfessional-Gen01/a8s-cli/ui/features/deploy"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"

@@ -93,7 +93,7 @@ The Node package installs a tiny launcher that detects your OS/CPU and runs the 
 For macOS and Linux:
 
 ```bash
-brew tap PorKeat/a8s-tui
+brew tap ITProfessional-Gen01/a8s-cli
 brew install a8s-cli
 ```
 
@@ -108,13 +108,13 @@ a8s-cli
 For Go developers, install from the current Go module:
 
 ```bash
-go install github.com/PorKeat/a8s-tui@latest
+go install github.com/ITProfessional-Gen01/a8s-cli@latest
 ```
 
 Run it with:
 
 ```bash
-a8s-tui
+a8s-cli
 ```
 
 If you want the local binary name to be `a8s-cli`, build it explicitly:

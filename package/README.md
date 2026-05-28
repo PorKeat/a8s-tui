@@ -16,14 +16,14 @@ npm install -g a8s-cli
 ### 2. Homebrew (macOS / Linux)
 The standard for Mac/Linux developers:
 ```bash
-brew tap PorKeat/a8s-tui
+brew tap ITProfessional-Gen01/a8s-cli
 brew install a8s-cli
 ```
 
 ### 3. Go Install
 For Go developers:
 ```bash
-go install github.com/PorKeat/a8s-tui@latest
+go install github.com/ITProfessional-Gen01/a8s-cli@latest
 ```
 
 ## Running the CLI

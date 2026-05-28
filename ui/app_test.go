@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"github.com/PorKeat/a8s-tui/api"
-	"github.com/PorKeat/a8s-tui/auth"
-	"github.com/PorKeat/a8s-tui/config"
+	"github.com/ITProfessional-Gen01/a8s-cli/api"
+	"github.com/ITProfessional-Gen01/a8s-cli/auth"
+	"github.com/ITProfessional-Gen01/a8s-cli/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,7 +207,7 @@ func TestLogoutClearsSession(t *testing.T) {
 		BackendBaseURL:   "http://backend",
 		KeycloakURL:      server.URL,
 		KeycloakRealm:    "a8s",
-		KeycloakClientID: "a8s-tui",
+		KeycloakClientID: "a8s-cli",
 	}, nil)
 	openURLCalled := false
 	m.auth.OpenURL = func(string) error {

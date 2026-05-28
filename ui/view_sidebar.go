@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	projectfeature "github.com/PorKeat/a8s-tui/ui/features/projects"
+	projectfeature "github.com/ITProfessional-Gen01/a8s-cli/ui/features/projects"
 
 	"charm.land/lipgloss/v2"
 )

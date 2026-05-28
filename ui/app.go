@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PorKeat/a8s-tui/api"
-	"github.com/PorKeat/a8s-tui/auth"
-	"github.com/PorKeat/a8s-tui/config"
-	"github.com/PorKeat/a8s-tui/ui/features/deploy"
-	"github.com/PorKeat/a8s-tui/ui/features/settings"
+	"github.com/ITProfessional-Gen01/a8s-cli/api"
+	"github.com/ITProfessional-Gen01/a8s-cli/auth"
+	"github.com/ITProfessional-Gen01/a8s-cli/config"
+	"github.com/ITProfessional-Gen01/a8s-cli/ui/features/deploy"
+	"github.com/ITProfessional-Gen01/a8s-cli/ui/features/settings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"

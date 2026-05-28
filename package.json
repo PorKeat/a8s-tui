@@ -13,8 +13,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PorKeat/a8s-tui.git"
+    "url": "git+https://github.com/ITProfessional-Gen01/a8s-cli.git"
   },
-  "author": "PorKeat",
+  "author": "ITProfessional-Gen01",
   "license": "MIT"
 }
