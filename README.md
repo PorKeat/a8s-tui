@@ -93,7 +93,7 @@ The Node package installs a tiny launcher that detects your OS/CPU and runs the 
 For macOS and Linux:
 
 ```bash
-brew tap ITProfessional-Gen01/a8s-cli
+brew tap PorKeat/a8s-tui
 brew install a8s-cli
 ```
 

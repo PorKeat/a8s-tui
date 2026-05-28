@@ -124,9 +124,8 @@ EOF
                             # Create the tag locally
                             git tag $NEW_VERSION
                             
-                            # Push the tag to both repositories
+                            # Push the tag to the repository
                             git push https://${GITHUB_TOKEN}@github.com/PorKeat/a8s-tui.git $NEW_VERSION
-                            git push https://${GITHUB_TOKEN}@github.com/ITProfessional-Gen01/a8s-cli.git $NEW_VERSION
                         '''
                     }
                 }
