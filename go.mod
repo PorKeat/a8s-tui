@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/lipgloss/v2 v2.0.2
 )
-
+J
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
