@@ -43,25 +43,18 @@ func LoadConfig() (AppConfig, error) {
 
 	cfg := AppConfig{
 		BackendBaseURL:       resolveBackendBaseURL(values),
-		KeycloakURL:          trimTrailingSlash(values["KEYCLOAK_URL"]),
-		KeycloakRealm:        strings.TrimSpace(values["KEYCLOAK_REALM"]),
-		KeycloakClientID:     strings.TrimSpace(values["KEYCLOAK_CLIENT_ID"]),
-		KeycloakClientSecret: strings.TrimSpace(values["KEYCLOAK_CLIENT_SECRET"]),
-		KeycloakRedirectURL:  strings.TrimSpace(values["KEYCLOAK_REDIRECT_URL"]),
+		KeycloakURL:          fallback(trimTrailingSlash(values["KEYCLOAK_URL"]), DefaultKeycloakURL),
+		KeycloakRealm:        fallback(strings.TrimSpace(values["KEYCLOAK_REALM"]), DefaultKeycloakRealm),
+		KeycloakClientID:     fallback(strings.TrimSpace(values["KEYCLOAK_CLIENT_ID"]), DefaultKeycloakClientID),
+		KeycloakClientSecret: fallback(strings.TrimSpace(values["KEYCLOAK_CLIENT_SECRET"]), DefaultKeycloakClientSecret),
+		KeycloakRedirectURL:  fallback(strings.TrimSpace(values["KEYCLOAK_REDIRECT_URL"]), DefaultKeycloakRedirectURL),
 	}
 
 	var missing []string
-	for _, key := range []string{
-		"KEYCLOAK_URL",
-		"KEYCLOAK_REALM",
-		"KEYCLOAK_CLIENT_ID",
-		"KEYCLOAK_CLIENT_SECRET",
-		"KEYCLOAK_REDIRECT_URL",
-	} {
-		if strings.TrimSpace(values[key]) == "" {
-			missing = append(missing, key)
-		}
-	}
+	if cfg.KeycloakURL == "" { missing = append(missing, "KEYCLOAK_URL") }
+	if cfg.KeycloakRealm == "" { missing = append(missing, "KEYCLOAK_REALM") }
+	if cfg.KeycloakClientID == "" { missing = append(missing, "KEYCLOAK_CLIENT_ID") }
+	if cfg.KeycloakRedirectURL == "" { missing = append(missing, "KEYCLOAK_REDIRECT_URL") }
 	if len(missing) > 0 {
 		return cfg, fmt.Errorf("missing required TUI env: %s", strings.Join(missing, ", "))
 	}
@@ -189,4 +182,11 @@ func (c AppConfig) AuthURL() string {
 
 func (c AppConfig) TokenURL() string {
 	return c.KeycloakIssuer() + "/protocol/openid-connect/token"
+}
+
+func fallback(value string, defaultValue string) string {
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }

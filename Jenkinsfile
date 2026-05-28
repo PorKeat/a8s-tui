@@ -10,6 +10,14 @@ pipeline {
         // These credentials must be configured in Jenkins
         GITHUB_TOKEN = credentials('github-token-cli')
         NODE_AUTH_TOKEN = credentials('npm-token')
+        
+        // Keycloak Secrets to bake into the binary
+        KEYCLOAK_URL = credentials('keycloak-url')
+        KEYCLOAK_REALM = credentials('keycloak-realm')
+        KEYCLOAK_CLIENT_ID = credentials('keycloak-client-id')
+        KEYCLOAK_CLIENT_SECRET = credentials('keycloak-client-secret')
+        KEYCLOAK_REDIRECT_URL = credentials('keycloak-redirect-url')
+        
         // Prepend our local installation directories to the PATH
         PATH = "${HOME}/.local/go/bin:${HOME}/.local/node/bin:${HOME}/.local/bin:${env.PATH}"
     }
@@ -46,6 +54,20 @@ pipeline {
         stage('Build & Test') {
             // Always run build and test on every push to ensure code is healthy
             steps {
+                sh '''#!/bin/bash
+                    # Inject Keycloak secrets directly into the Go source code before compiling
+                    cat <<EOF > config/config_defaults.go
+package config
+
+var (
+	DefaultKeycloakURL          = "${KEYCLOAK_URL}"
+	DefaultKeycloakRealm        = "${KEYCLOAK_REALM}"
+	DefaultKeycloakClientID     = "${KEYCLOAK_CLIENT_ID}"
+	DefaultKeycloakClientSecret = "${KEYCLOAK_CLIENT_SECRET}"
+	DefaultKeycloakRedirectURL  = "${KEYCLOAK_REDIRECT_URL}"
+)
+EOF
+                '''
                 sh 'go build .'
                 sh 'go test ./...'
             }
