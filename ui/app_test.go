@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"a8s-tui/api"
-	"a8s-tui/auth"
-	"a8s-tui/config"
+	"github.com/PorKeat/a8s-tui/api"
+	"github.com/PorKeat/a8s-tui/auth"
+	"github.com/PorKeat/a8s-tui/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"

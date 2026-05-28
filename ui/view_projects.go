@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"a8s-tui/api"
+	"github.com/PorKeat/a8s-tui/api"
 	"fmt"
 	"strings"
 

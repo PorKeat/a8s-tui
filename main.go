@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"a8s-tui/ui"
+	"github.com/PorKeat/a8s-tui/ui"
 )
 
 func main() {

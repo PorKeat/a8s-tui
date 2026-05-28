@@ -1,4 +1,4 @@
-module a8s-tui
+module github.com/PorKeat/a8s-tui
 
 go 1.26.3
 
