@@ -1,5 +1,5 @@
 {
-  "name": "autonomous-a8s-cli",
+  "name": "autonomous-cli",
   "version": "0.0.0-development",
   "description": "The official CLI for Autonomous 8s",
   "bin": {
