@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+console.error("a8s-cli has not been properly installed yet.");
+process.exit(1);

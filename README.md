@@ -1,231 +1,99 @@
-# A8S TUI
+# a8s-cli
 
-A Bubble Tea terminal dashboard for A8S. It logs in with Keycloak, keeps tokens in memory for the current session, fetches live workspace projects from the backend, and supports single-instance database deployment with live deployment logs.
+The official command-line interface and terminal dashboard for Autonomous 8s (A8S). It securely authenticates with Keycloak, connects to your backend, and lets you manage workspace projects and database deployments directly from your terminal.
+
+## Installation
+
+You can install `a8s-cli` using any of the following methods:
+
+### 1. NPM (Node Package Manager)
+The fastest way for web developers:
+```bash
+npm install -g a8s-cli
+```
+*(This automatically detects your OS and downloads the native Go binary—it does not run slow JavaScript!)*
+
+### 2. Homebrew (macOS / Linux)
+The standard for Mac/Linux developers:
+```bash
+brew tap ITProfessional-Gen01/a8s-cli
+brew install a8s-cli
+```
+
+### 3. Go Install
+For Go developers:
+```bash
+go install github.com/ITProfessional-Gen01/a8s-cli@latest
+```
+
+## Running the CLI
+
+If you installed it globally using the commands above, just run:
+```bash
+a8s-cli
+```
+
+If you are developing locally, run:
+```bash
+go run main.go
+```
 
 ## Features
 
-- Launcher screen with only `Login with Keycloak` and `Quit`
-- Smooth dashboard layout with a sidebar, full-content workspace, padding, outlines, and Nerd Font icons
-- Workspace section with `Projects` and `Deployment`
-- Security section with `Image Scanner`
-- Observability section with `Logs` and `Monitoring`
-- Settings section with `User` preferences and light/dark mode switching
-- Project detail overview with connection profile, backup history, and real database connection data when the backend returns it
-- Deployment type picker for `Single database`, `Database cluster`, `Monolithic`, and `Microservices`
-- Single database deployment form with engine, version, and size selectors
-- Live deployment log screen that polls backend deployment status
+- **Authentication**: Seamless Keycloak integration with automatic token refreshing.
+- **Projects Dashboard**: View live database deployments, monoliths, and microservice workspaces.
+- **Project Details**: Get connection profiles, hostnames, ports, and JDBC URLs instantly.
+- **Database Deployments**: Create single-instance databases (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
+- **Live Logs**: Watch real-time deployment logs stream directly to your terminal.
+- **Customizable UI**: Fully integrated light/dark mode and support for icon-less environments (set `A8S_NO_ICONS=true`).
 
-The UI is built with:
+## Keyboard Shortcuts
 
-- Bubble Tea for app state, input, and update loop
-- Lip Gloss for colors, borders, padding, and layout
-- Nerd Font glyphs for sidebar and project icons
-- Bubbles-compatible patterns for terminal components
+The UI is highly responsive and designed for power users. 
 
-## Requirements
+**Global Navigation:**
+- `Up/Down` or `j/k`: Move cursor
+- `Left/Right` or `Tab`: Switch focus between Sidebar and Main Content
+- `Enter`: Select or open
+- `q` or `ctrl+c`: Quit
+- `esc`: Go back
 
-- Go `1.26.3` or newer
-- A terminal with color support
-- A Nerd Font installed and selected in your terminal
-- Browser access for Keycloak login
-- A configured A8S backend
+**Shortcuts (When Ready):**
+- `p`: Open Projects
+- `d`: Open Deployments
+- `i`: Open Image Scanner
+- `g`: Open Logs
+- `m`: Open Monitoring
+- `u` or `s`: Open User Settings
+- `r`: Refresh data
+- `/`: Filter projects
+- `o`: Logout
 
-## Run
+## Development
 
-From the TUI directory:
-
+To build the binary locally:
 ```bash
-cd tui
-go run .
+go build .
 ```
 
-Run tests:
-
+To run the test suite:
 ```bash
-cd tui
 go test ./...
 ```
 
-## Login Flow
-
-1. Start the TUI with `go run .`.
-2. Select `Login with Keycloak`.
-3. Your browser opens the Keycloak login page.
-4. After login, Keycloak redirects to `KEYCLOAK_REDIRECT_URL`.
-5. Return to the terminal; the TUI loads live projects automatically.
-
-Tokens are kept in memory only. Closing or logging out clears the session.
-
-## Dashboard
-
-After login, the sidebar contains:
-
-```text
-Workspace
-  Projects
-  Deployment
-
-Security
-  Image Scanner
-
-Observability
-  Logs
-  Monitoring
-
-Settings
-  User
+To quickly commit and push your code:
+```bash
+./auto_push.sh "your commit message"
 ```
 
-The `Projects` page shows live database deployments, monolith apps, and microservice workspaces returned by the backend. Press `enter` on a project to open its detail page.
+## Publishing a Release
 
-## Project Detail
+Releases are fully automated via GitHub Actions, GoReleaser, and NPM. To publish a new version to the world:
 
-The project detail page shows:
-
-- Overview data: engine, mode, namespace, and updated time
-- Connection profile: hostname, port, database, username, engine, version, namespace, and JDBC URL when available
-- Backup history placeholder
-
-For database projects, the TUI hydrates connection details by fetching the first deployment ID from `databaseDeploymentIds` through:
-
-```text
-GET /api/v1/database-deployments/{deploymentId}
+1. Ensure your NPM token is set in GitHub Secrets as `NPM_TOKEN`.
+2. Push a new Git tag:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
 ```
-
-`Hostname`, `Port`, and `JDBC URL` are rendered only when real backend data is available. They are not hardcoded.
-
-## Deployment
-
-Open `Deployment` from the sidebar or press `d`.
-
-The deployment page lists:
-
-- Single database
-- Database cluster
-- Monolithic
-- Microservices
-
-Only `Single database` is currently active. Other deployment types are shown as coming soon.
-
-The single database form supports:
-
-- Project name
-- Engine
-- Database name
-- Username
-- Password
-- Version
-- Size
-
-Supported engines:
-
-- PostgreSQL
-- MySQL
-- MongoDB
-- Redis
-- Cassandra
-
-After submit, the TUI opens a deployment log screen and polls:
-
-```text
-GET /api/v1/database-deployments/{deploymentId}
-```
-
-Logs are shown from backend `statusLog`.
-
-## User Settings
-
-Open `User` under Settings to change appearance.
-
-Press `t`, `space`, or `enter` to switch between:
-
-- Dark mode
-- Light mode
-
-## Keyboard
-
-Launcher:
-
-```text
-up/down or j/k  move
-enter           select
-l               login
-q               quit
-```
-
-Dashboard:
-
-```text
-up/down or j/k  move selected project, sidebar item, or deployment type
-left/right      cycle focus area
-tab             cycle focus area
-enter           open selected project, sidebar page, or deployment type
-/               filter projects
-backspace       clear project filter
-r               refresh live projects
-p               open Projects
-d               open Deployment
-i               open Image Scanner
-g               open Logs
-m               open Monitoring
-u or s          open User settings
-o               logout
-esc             close current section back to Projects, or quit from Projects
-q or ctrl+c     quit
-```
-
-Project detail:
-
-```text
-b or esc        back to Projects
-q or ctrl+c     quit
-```
-
-Deployment type list:
-
-```text
-up/down or j/k  move deployment type
-enter           open selected deployment type
-esc             close Deployment back to Projects
-q or ctrl+c     quit
-```
-
-Database form:
-
-```text
-up/down or j/k  move between fields
-left/right      change engine, version, or size
-enter           next field, or deploy on the Deploy row
-backspace       delete text
-esc             cancel
-ctrl+c          quit
-```
-
-Deployment logs:
-
-```text
-up/down or j/k  scroll logs
-r               refresh logs now
-b or esc        back to Projects and refresh project list
-q or ctrl+c     quit
-```
-
-User settings:
-
-```text
-t, space, enter switch light/dark mode
-esc             back to Projects
-q or ctrl+c     quit
-```
-
-## Troubleshooting
-
-If the TUI says required env values are missing, check `tui/.env`.
-
-If login does not return to the TUI, confirm `KEYCLOAK_REDIRECT_URL` uses the same localhost callback configured in Keycloak.
-
-If projects fail to load after login, confirm the backend URL is correct and the backend accepts the Keycloak JWT.
-
-If Hostname, Port, or JDBC URL do not appear in project detail, confirm the backend deployment detail response includes `serviceHost` and `servicePort`.
-
-If deployment logs do not update, the deployment may not have returned an ID or the backend may not be writing `statusLog` yet.
+GitHub Actions will automatically build binaries for all platforms, update Homebrew, and publish to NPM!
