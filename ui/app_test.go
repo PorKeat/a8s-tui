@@ -4,6 +4,7 @@ import (
 	"github.com/PorKeat/a8s-tui/api"
 	"github.com/PorKeat/a8s-tui/auth"
 	"github.com/PorKeat/a8s-tui/config"
+	"github.com/PorKeat/a8s-tui/ui/features/settings"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,7 @@ import (
 func TestModelMoveAndFilter(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
+	m.focus = focusList
 	m.projects = []api.LiveProject{
 		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
 		{Name: "Orders", Kind: "database", Status: "RUNNING", Engine: "postgres"},
@@ -99,10 +101,36 @@ func TestLauncherArrowSelection(t *testing.T) {
 	}
 }
 
+func TestProjectsLoadStartsOutsideProjectWorkspace(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	next, _ := m.Update(projectsResultMsg{
+		tokens:   auth.TokenSet{AccessToken: "access"},
+		projects: []api.LiveProject{{ID: "project-1", Name: "web", Kind: "monolith", Status: "DEPLOYED"}},
+	})
+	m = next.(model)
+	if m.state != stateReady || m.page != pageProjects || m.focus != focusSidebar || m.navCursor != 0 {
+		t.Fatalf("expected ready state outside project workspace: %#v", m)
+	}
+
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.focus != focusList || m.page != pageProjects {
+		t.Fatalf("expected enter to join project workspace: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestInitialThemeDefaultsToOrange(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	if m.themeLabel() != "Orange" {
+		t.Fatalf("expected Orange default theme, got %q", m.themeLabel())
+	}
+}
+
 func TestLoggedInNavigationSections(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
 	m.focus = focusSidebar
+	m.projects = []api.LiveProject{{ID: "project-1", Name: "web", Kind: "monolith", Status: "DEPLOYED"}}
 
 	next, _ := m.updateKey(keyMsg("j"))
 	m = next.(model)
@@ -118,9 +146,34 @@ func TestLoggedInNavigationSections(t *testing.T) {
 
 	next, cmd := m.updateKey(keyMsg("esc"))
 	m = next.(model)
-	if cmd != nil || m.page != pageProjects {
-		t.Fatalf("expected esc to close section, page=%d cmd=%v", m.page, cmd)
+	if cmd != nil || m.page != pageDeployment || m.focus != focusSidebar {
+		t.Fatalf("expected esc to leave deployment workspace: %#v cmd=%v", m, cmd)
 	}
+
+	m.focus = focusSidebar
+	m.navCursor = 0
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if m.page != pageProjects || m.focus != focusList {
+		t.Fatalf("expected projects page to focus project list: %#v", m)
+	}
+	next, cmd = m.updateKey(keyMsg("esc"))
+	m = next.(model)
+	if cmd != nil || m.page != pageProjects || m.focus != focusSidebar {
+		t.Fatalf("expected esc to leave project workspace: %#v cmd=%v", m, cmd)
+	}
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if m.page != pageProjects || m.focus != focusList {
+		t.Fatalf("expected enter to rejoin project workspace: %#v", m)
+	}
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if !m.projectDetailOpen {
+		t.Fatalf("expected enter to open project detail after selecting Projects: %#v", m)
+	}
+	m.projectDetailOpen = false
+
 	m.focus = focusSidebar
 	m.moveNavigationCursor(1)
 
@@ -137,16 +190,30 @@ func TestLoggedInNavigationSections(t *testing.T) {
 	}
 
 	m.dbFormOpen = false
+	m.deployCursor = 1
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if !m.dbFormOpen || m.dbForm.modeOrDefault() != "cluster" {
+		t.Fatalf("expected database cluster form to open: %#v", m)
+	}
+
+	m.dbFormOpen = false
 	next, _ = m.updateKey(keyMsg("i"))
 	m = next.(model)
+	if m.page != pageDeployment || m.navCursor != 2 || m.focus != focusSidebar {
+		t.Fatalf("expected image scanner shortcut to select sidebar item: %#v", m)
+	}
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
 	if m.page != pageImageScanner || m.navCursor != 2 {
-		t.Fatalf("navigation state = %#v", m)
+		t.Fatalf("expected enter to open image scanner: %#v", m)
 	}
 }
 
-func TestProjectArrowSelectionAndFocus(t *testing.T) {
+func TestProjectArrowSelectionDoesNotLeaveWorkspace(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
+	m.focus = focusList
 	m.projects = []api.LiveProject{
 		{Name: "Frontend", Kind: "monolith", Status: "DEPLOYED"},
 		{Name: "Orders", Kind: "database", Status: "RUNNING"},
@@ -160,7 +227,7 @@ func TestProjectArrowSelectionAndFocus(t *testing.T) {
 
 	next, _ = m.updateKey(specialKeyMsg(tea.KeyRight))
 	m = next.(model)
-	if m.focus != focusSidebar {
+	if m.focus != focusList {
 		t.Fatalf("focus = %d", m.focus)
 	}
 
@@ -171,9 +238,83 @@ func TestProjectArrowSelectionAndFocus(t *testing.T) {
 	}
 }
 
+func TestLeftRightStayInSidebarSelectionMode(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageProjects
+	m.focus = focusSidebar
+	m.navCursor = m.navigationIndexByPage(pageImageScanner)
+
+	next, cmd := m.updateKey(specialKeyMsg(tea.KeyRight))
+	m = next.(model)
+	if cmd != nil || m.focus != focusSidebar || m.page != pageProjects || m.navCursor != m.navigationIndexByPage(pageImageScanner) {
+		t.Fatalf("expected right to keep sidebar selection mode: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyLeft))
+	m = next.(model)
+	if cmd != nil || m.focus != focusSidebar || m.page != pageProjects || m.navCursor != m.navigationIndexByPage(pageImageScanner) {
+		t.Fatalf("expected left to keep sidebar selection mode: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestDeploymentLeftRightDoesNotLeaveWorkspace(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageDeployment
+	m.focus = focusList
+	m.navCursor = m.navigationIndexByPage(pageDeployment)
+
+	next, cmd := m.updateKey(specialKeyMsg(tea.KeyLeft))
+	m = next.(model)
+	if cmd != nil || m.page != pageDeployment || m.focus != focusList {
+		t.Fatalf("expected left to stay in deployment workspace: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyRight))
+	m = next.(model)
+	if cmd != nil || m.page != pageDeployment || m.focus != focusList {
+		t.Fatalf("expected right to stay in deployment workspace: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestUserSettingsCanToggleTheme(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageUserSettings
+	m.focus = focusList
+	m.themeIndex = 0
+
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.themeIndex != 1 {
+		t.Fatalf("expected enter to switch to next theme: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("t"))
+	m = next.(model)
+	if cmd != nil || m.themeIndex != 2 {
+		t.Fatalf("expected t to switch to next theme: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg(" "))
+	m = next.(model)
+	if cmd != nil || m.themeIndex != 3 {
+		t.Fatalf("expected space to switch to next theme: %#v cmd=%v", m, cmd)
+	}
+
+	m.themeIndex = len(settings.ThemeLabels()) - 1
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.themeIndex != 0 {
+		t.Fatalf("expected theme cycling to wrap: %#v cmd=%v", m, cmd)
+	}
+}
+
 func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
+	m.focus = focusList
 	m.projects = []api.LiveProject{{Name: "mama", Kind: "database", Status: "DEPLOYED", Engine: "PostgreSQL"}}
 
 	next, _ := m.updateKey(keyMsg("enter"))
@@ -186,6 +327,142 @@ func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
 	m = next.(model)
 	if cmd != nil || m.projectDetailOpen {
 		t.Fatalf("expected project detail to close, open=%v cmd=%v", m.projectDetailOpen, cmd)
+	}
+}
+
+func TestProjectDeleteConfirmationFlow(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageProjects
+	m.focus = focusList
+	m.projects = []api.LiveProject{{ID: "project-1", Name: "web", Kind: "monolith", Status: "DEPLOYED"}}
+
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !m.projectDetailOpen {
+		t.Fatalf("expected project detail, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("right"))
+	m = next.(model)
+	if cmd != nil || m.projectDetailButton != 1 {
+		t.Fatalf("expected cancel selected on detail, model=%#v cmd=%v", m, cmd)
+	}
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.projectDetailOpen {
+		t.Fatalf("expected detail cancel button to close project, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !m.projectDetailOpen || m.projectDetailButton != 0 {
+		t.Fatalf("expected detail to reopen with delete selected, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !m.deleteConfirmOpen || m.deleteProject.ID != "project-1" {
+		t.Fatalf("expected delete confirmation, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("tab"))
+	m = next.(model)
+	if cmd != nil || m.deleteConfirmButton != 1 {
+		t.Fatalf("expected esc button selected, model=%#v cmd=%v", m, cmd)
+	}
+	next, cmd = m.updateKey(keyMsg("left"))
+	m = next.(model)
+	if cmd != nil || m.deleteConfirmButton != 0 {
+		t.Fatalf("expected delete button selected, model=%#v cmd=%v", m, cmd)
+	}
+	next, cmd = m.updateKey(keyMsg("right"))
+	m = next.(model)
+	if cmd != nil || m.deleteConfirmButton != 1 {
+		t.Fatalf("expected esc button selected with right arrow, model=%#v cmd=%v", m, cmd)
+	}
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.deleteConfirmOpen || m.deleteProject.ID != "" || m.deleteConfirmText != "" {
+		t.Fatalf("expected selected esc button to cancel delete, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !m.deleteConfirmOpen || m.deleteConfirmButton != 0 {
+		t.Fatalf("expected delete confirmation to reopen on delete button, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("wrong"))
+	m = next.(model)
+	if cmd != nil || !m.deleteConfirmOpen || m.state != stateReady {
+		t.Fatalf("expected delete to wait for exact project name, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("esc"))
+	m = next.(model)
+	if cmd != nil || m.deleteConfirmOpen || m.deleteProject.ID != "" || m.deleteConfirmText != "" {
+		t.Fatalf("expected delete cancellation, model=%#v cmd=%v", m, cmd)
+	}
+
+	next, _ = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	for _, r := range "web" {
+		next, _ = m.updateKey(keyMsg(string(r)))
+		m = next.(model)
+	}
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.deleteConfirmOpen || m.state != stateLoading {
+		t.Fatalf("expected delete command, model=%#v cmd=%v", m, cmd)
+	}
+}
+
+func TestBackspaceOnEmptyMonolithicGitRemoteDoesNotCrash(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm.repoURL = ""
+	m.monolithForm.focus = 1
+
+	next, cmd := m.updateKey(keyMsg("backspace"))
+	m = next.(model)
+	if cmd != nil {
+		t.Fatalf("expected no command, got %v", cmd)
+	}
+	if m.monolithForm.repoURL != "" {
+		t.Fatalf("repoURL = %q", m.monolithForm.repoURL)
+	}
+}
+
+func TestNewMonolithicDeployFormDoesNotDefaultGitRemote(t *testing.T) {
+	form := newMonolithicDeployForm()
+	if form.repoURL != "" {
+		t.Fatalf("repoURL should start empty, got %q", form.repoURL)
+	}
+	if form.repoFullName != "" {
+		t.Fatalf("repoFullName should start empty, got %q", form.repoFullName)
+	}
+}
+
+func TestPasteMonolithicGitRemoteURL(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm.repoURL = ""
+	m.monolithForm.repoFullName = ""
+	m.monolithForm.focus = 1
+
+	next, cmd := m.Update(tea.PasteMsg{Content: "https://github.com/team/web.git\n"})
+	m = next.(model)
+	if cmd != nil {
+		t.Fatalf("expected no command, got %v", cmd)
+	}
+	if m.monolithForm.repoURL != "https://github.com/team/web.git" {
+		t.Fatalf("repoURL = %q", m.monolithForm.repoURL)
+	}
+	if m.monolithForm.repoFullName != "team/web" {
+		t.Fatalf("repoFullName = %q", m.monolithForm.repoFullName)
 	}
 }
 

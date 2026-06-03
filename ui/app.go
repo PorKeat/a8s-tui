@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/PorKeat/a8s-tui/config"
 	"github.com/PorKeat/a8s-tui/ui/features/deploy"
 	"github.com/PorKeat/a8s-tui/ui/features/settings"
+	charmterm "github.com/charmbracelet/x/term"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -48,37 +50,42 @@ const (
 )
 
 type model struct {
-	config            config.AppConfig
-	configErr         error
-	auth              auth.AuthClient
-	projectsAPI       api.ProjectClient
-	spinner           spinner.Model
-	tokens            auth.TokenSet
-	state             appState
-	width             int
-	height            int
-	cursor            int
-	launcherCursor    int
-	navCursor         int
-	deployCursor      int
-	page              appPage
-	focus             focusArea
-	filter            string
-	filtering         bool
-	projects          []api.LiveProject
-	projectDetailOpen bool
-	dbForm            databaseDeployForm
-	dbFormOpen        bool
-	monolithForm      monolithicDeployForm
-	monolithFormOpen  bool
-	deployLogOpen     bool
-	deployLog         api.DatabaseDeploymentRecord
-	deployLogOffset   int
-	darkMode          bool
-	logoutSucceeded   bool
-	message           string
-	lastRefreshed     time.Time
-	userName          string
+	config              config.AppConfig
+	configErr           error
+	auth                auth.AuthClient
+	projectsAPI         api.ProjectClient
+	spinner             spinner.Model
+	tokens              auth.TokenSet
+	state               appState
+	width               int
+	height              int
+	cursor              int
+	launcherCursor      int
+	navCursor           int
+	deployCursor        int
+	page                appPage
+	focus               focusArea
+	filter              string
+	filtering           bool
+	projects            []api.LiveProject
+	projectDetailOpen   bool
+	projectDetailButton int
+	deleteConfirmOpen   bool
+	deleteProject       api.LiveProject
+	deleteConfirmText   string
+	deleteConfirmButton int
+	dbForm              databaseDeployForm
+	dbFormOpen          bool
+	monolithForm        monolithicDeployForm
+	monolithFormOpen    bool
+	deployLogOpen       bool
+	deployLog           api.DatabaseDeploymentRecord
+	deployLogOffset     int
+	themeIndex          int
+	logoutSucceeded     bool
+	message             string
+	lastRefreshed       time.Time
+	userName            string
 }
 
 type loginResultMsg struct {
@@ -103,6 +110,12 @@ type databaseDeployResultMsg struct {
 	err        error
 }
 
+type clusterDeployResultMsg struct {
+	tokens     auth.TokenSet
+	deployment api.ClusterDeploymentRecord
+	err        error
+}
+
 type databaseDeploymentPollMsg struct {
 	tokens     auth.TokenSet
 	deployment api.DatabaseDeploymentRecord
@@ -115,8 +128,15 @@ type monolithicDeployResultMsg struct {
 	err        error
 }
 
+type projectDeleteResultMsg struct {
+	tokens  auth.TokenSet
+	project api.LiveProject
+	err     error
+}
+
 type databaseDeployForm struct {
 	focus        int
+	mode         string
 	projectName  string
 	engineIndex  int
 	databaseName string
@@ -159,16 +179,17 @@ func initialModel(config config.AppConfig, configErr error) model {
 		width:        118,
 		height:       36,
 		page:         pageProjects,
-		focus:        focusList,
-		darkMode:     true,
+		focus:        focusSidebar,
+		themeIndex:   2,
 		message:      message,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return func() tea.Msg {
-		return m.spinner.Tick()
-	}
+	return tea.Batch(
+		func() tea.Msg { return tea.RequestWindowSize() },
+		func() tea.Msg { return m.spinner.Tick() },
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -180,6 +201,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case tea.PasteMsg:
+		return m.updatePaste(msg)
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
 	case loginResultMsg:
@@ -191,6 +214,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tokens = msg.tokens
 		m.logoutSucceeded = false
 		m.state = stateLoading
+		m.page = pageProjects
+		m.navCursor = m.navigationIndexByPage(pageProjects)
+		m.focus = focusSidebar
 		m.message = "Authenticated. Loading live projects..."
 		return m, m.fetchProjectsCmd()
 	case projectsResultMsg:
@@ -240,6 +266,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.fetchDatabaseDeploymentCmd(msg.deployment.ID, 2*time.Second)
+	case clusterDeployResultMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.state = stateReady
+			m.dbFormOpen = true
+			m.message = "Database cluster deployment failed: " + msg.err.Error()
+			return m, nil
+		}
+		name := firstNonEmpty(msg.deployment.Name, msg.deployment.ReleaseName, "database cluster")
+		m.dbFormOpen = false
+		m.dbForm = newDatabaseDeployForm()
+		m.deployLogOpen = true
+		m.deployLog = clusterDeploymentLogRecord(msg.deployment)
+		m.deployLogOffset = 0
+		m.state = stateReady
+		m.message = "Database cluster deployment accepted: " + name
+		return m, nil
 	case databaseDeploymentPollMsg:
 		if !m.deployLogOpen {
 			return m, nil
@@ -287,11 +332,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Monolithic deployment queued: " + name
 		}
 		return m, m.fetchProjectsCmd()
+	case projectDeleteResultMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		name := firstNonEmpty(msg.project.Name, msg.project.ProjectName, "project")
+		if msg.err != nil {
+			m.state = stateReady
+			m.message = "Delete failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.state = stateLoading
+		m.projectDetailOpen = false
+		m.projectDetailButton = 0
+		m.deleteConfirmOpen = false
+		m.deleteProject = api.LiveProject{}
+		m.deleteConfirmText = ""
+		m.deleteConfirmButton = 0
+		m.message = "Deleted " + name + ". Refreshing projects..."
+		return m, m.fetchProjectsCmd()
 	}
 	return m, nil
 }
 
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.deleteConfirmOpen {
+		return m.updateDeleteConfirmation(msg)
+	}
 	if m.deployLogOpen {
 		return m.updateDeploymentLog(msg)
 	}
@@ -335,14 +402,14 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key == "ctrl+c" || key == "q":
 		return m, tea.Quit
 	case key == "esc" || code == tea.KeyEscape:
-		if m.state == stateReady && m.page != pageProjects {
-			m.setPage(pageProjects)
-			m.focus = focusList
-			m.message = "Closed section"
+		if m.state == stateReady && m.focus != focusSidebar {
+			m.focus = focusSidebar
+			m.filtering = false
+			m.message = "Left " + m.pageTitle() + " workspace"
 			return m, nil
 		}
 		return m, tea.Quit
-	case m.state == stateReady && m.page == pageUserSettings && (key == "t" || key == " " || (isEnter && m.focus != focusSidebar)):
+	case m.state == stateReady && m.page == pageUserSettings && (key == "t" || key == " " || key == "space" || (isEnter && m.focus != focusSidebar)):
 		m.toggleTheme()
 	case isEnter || key == "l":
 		if m.state == stateReady && isEnter && m.focus == focusSidebar {
@@ -360,28 +427,27 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.startLoginIfAvailable()
 	case key == "p":
 		if m.state == stateReady {
-			m.setPage(pageProjects)
-			m.focus = focusList
+			m.selectNavigationShortcut(pageProjects)
 		}
 	case key == "d":
 		if m.state == stateReady {
-			m.setPage(pageDeployment)
+			m.selectNavigationShortcut(pageDeployment)
 		}
 	case key == "i":
 		if m.state == stateReady {
-			m.setPage(pageImageScanner)
+			m.selectNavigationShortcut(pageImageScanner)
 		}
 	case key == "g":
 		if m.state == stateReady {
-			m.setPage(pageLogs)
+			m.selectNavigationShortcut(pageLogs)
 		}
 	case key == "m":
 		if m.state == stateReady {
-			m.setPage(pageMonitoring)
+			m.selectNavigationShortcut(pageMonitoring)
 		}
 	case key == "u" || key == "s":
 		if m.state == stateReady {
-			m.setPage(pageUserSettings)
+			m.selectNavigationShortcut(pageUserSettings)
 		}
 	case key == "r":
 		if m.tokens.AccessToken != "" {
@@ -399,6 +465,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateReady {
 			m.page = pageProjects
 			m.projectDetailOpen = false
+			m.projectDetailButton = 0
+			m.deleteConfirmOpen = false
+			m.deleteProject = api.LiveProject{}
+			m.deleteConfirmText = ""
+			m.deleteConfirmButton = 0
 			m.dbFormOpen = false
 			m.navCursor = m.navigationIndexByPage(pageProjects)
 			m.focus = focusList
@@ -438,20 +509,52 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case key == "left" || code == tea.KeyLeft:
 		if m.state == stateReady {
-			m.focus = focusArea((int(m.focus) + m.focusAreaCount() - 1) % m.focusAreaCount())
-			m.message = "Focus switched"
+			if m.focus == focusSidebar {
+				item := m.selectedNavigationItem()
+				m.message = "Press enter to open " + item.label
+				return m, nil
+			}
+			m.message = "Use esc to leave this workspace"
 		}
 	case key == "right" || code == tea.KeyRight:
 		if m.state == stateReady {
-			m.focus = focusArea((int(m.focus) + 1) % m.focusAreaCount())
-			m.message = "Focus switched"
+			if m.focus == focusSidebar {
+				item := m.selectedNavigationItem()
+				m.message = "Press enter to open " + item.label
+				return m, nil
+			}
+			m.message = "Use esc to leave this workspace"
 		}
+	}
+	return m, nil
+}
+
+func (m model) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	text := sanitizePastedFieldText(msg.Content)
+	if text == "" {
+		return m, nil
+	}
+	switch {
+	case m.deleteConfirmOpen:
+		m.deleteConfirmText += text
+		m.message = "Type project name and press enter to delete"
+	case m.dbFormOpen:
+		m.appendDatabaseFormText(text)
+		m.message = "Pasted into field"
+	case m.monolithFormOpen:
+		m.appendMonolithicFormText(text)
+		m.message = "Pasted into field"
+	case m.filtering:
+		m.filter += text
+		m.cursor = clamp(m.cursor, 0, max(len(m.visibleProjects())-1, 0))
+		m.message = "Filter updated"
 	}
 	return m, nil
 }
 
 func newDatabaseDeployForm() databaseDeployForm {
 	return databaseDeployForm{
+		mode:         "single-instance",
 		engineIndex:  0,
 		versionIndex: 0,
 		sizeIndex:    0,
@@ -461,13 +564,11 @@ func newDatabaseDeployForm() databaseDeployForm {
 func newMonolithicDeployForm() monolithicDeployForm {
 	local := deploy.DetectLocalProject()
 	return monolithicDeployForm{
-		projectName:  local.Name,
-		repoURL:      local.RepoURL,
-		repoFullName: local.RepoFullName,
-		branch:       local.Branch,
-		appPort:      fmt.Sprintf("%d", local.AppPort),
-		framework:    local.Framework,
-		directory:    local.Directory,
+		projectName: local.Name,
+		branch:      local.Branch,
+		appPort:     fmt.Sprintf("%d", local.AppPort),
+		framework:   local.Framework,
+		directory:   local.Directory,
 	}
 }
 
@@ -585,6 +686,7 @@ func (m *model) appendMonolithicFormText(text string) {
 		m.monolithForm.projectName += text
 	case 1:
 		m.monolithForm.repoURL += text
+		m.monolithForm.repoFullName = deploy.RepoFullNameFromURL(m.monolithForm.repoURL)
 	case 2:
 		m.monolithForm.branch += text
 	case 3:
@@ -598,6 +700,7 @@ func (m *model) deleteMonolithicFormRune() {
 		m.monolithForm.projectName = trimLastRune(m.monolithForm.projectName)
 	case 1:
 		m.monolithForm.repoURL = trimLastRune(m.monolithForm.repoURL)
+		m.monolithForm.repoFullName = deploy.RepoFullNameFromURL(m.monolithForm.repoURL)
 	case 2:
 		m.monolithForm.branch = trimLastRune(m.monolithForm.branch)
 	case 3:
@@ -606,6 +709,9 @@ func (m *model) deleteMonolithicFormRune() {
 }
 
 func (m model) submitDatabaseDeployment() (tea.Model, tea.Cmd) {
+	if m.dbForm.modeOrDefault() == "cluster" {
+		return m.submitClusterDeployment()
+	}
 	input, err := m.dbForm.input()
 	if err != nil {
 		m.message = err.Error()
@@ -635,6 +741,79 @@ func (m model) submitDatabaseDeployment() (tea.Model, tea.Cmd) {
 		}
 		return databaseDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
 	}
+}
+
+func (m model) submitClusterDeployment() (tea.Model, tea.Cmd) {
+	input, err := m.dbForm.clusterInput()
+	if err != nil {
+		m.message = err.Error()
+		return m, nil
+	}
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	m.message = "Submitting database cluster deployment..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterDeployResultMsg{tokens: tokens, err: err}
+			}
+		}
+		deployment, err := projectsAPI.CreateClusterDeployment(ctx, tokens.AccessToken, input)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterDeployResultMsg{tokens: tokens, err: err}
+			}
+			deployment, err = projectsAPI.CreateClusterDeployment(ctx, tokens.AccessToken, input)
+		}
+		return clusterDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
+	}
+}
+
+func clusterDeploymentLogRecord(deployment api.ClusterDeploymentRecord) api.DatabaseDeploymentRecord {
+	status := firstNonEmpty(deployment.Status, "DEPLOYING")
+	statusLog := clusterDeploymentStatusLog(deployment)
+	return api.DatabaseDeploymentRecord{
+		ID:                   firstNonEmpty(deployment.ClusterID, deployment.ReleaseName),
+		ReleaseName:          deployment.ReleaseName,
+		Namespace:            deployment.Namespace,
+		Engine:               deployment.Engine,
+		DeploymentMode:       "cluster",
+		ProjectName:          firstNonEmpty(deployment.Name, deployment.ReleaseName),
+		DatabaseName:         firstNonEmpty(deployment.Name, deployment.ReleaseName),
+		Version:              "",
+		ServiceHost:          deployment.ServiceHost,
+		ServicePort:          deployment.ServicePort,
+		ConnectionTLSEnabled: deployment.TLSEnabled,
+		Status:               status,
+		StatusMessage:        deployment.StatusMessage,
+		StatusLog:            statusLog,
+	}
+}
+
+func clusterDeploymentStatusLog(deployment api.ClusterDeploymentRecord) string {
+	var lines []string
+	if len(deployment.Command) > 0 {
+		lines = append(lines, "$ "+strings.Join(deployment.Command, " "))
+	}
+	if deployment.Stdout != "" {
+		lines = append(lines, deployment.Stdout)
+	}
+	if deployment.Stderr != "" {
+		lines = append(lines, deployment.Stderr)
+	}
+	if deployment.StatusMessage != "" {
+		lines = append(lines, deployment.StatusMessage)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "Cluster deployment request accepted.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) submitMonolithicDeployment() (tea.Model, tea.Cmd) {
@@ -698,14 +877,110 @@ func (m model) updateDeploymentLog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) updateProjectDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
 	switch {
 	case key == "ctrl+c" || key == "q":
 		return m, tea.Quit
+	case key == "tab" || code == tea.KeyTab:
+		m.projectDetailButton = (m.projectDetailButton + 1) % 2
+		m.message = m.projectDetailButtonMessage()
+		return m, nil
+	case key == "left" || key == "up" || code == tea.KeyLeft || code == tea.KeyUp:
+		m.projectDetailButton = 0
+		m.message = m.projectDetailButtonMessage()
+		return m, nil
+	case key == "right" || key == "down" || code == tea.KeyRight || code == tea.KeyDown:
+		m.projectDetailButton = 1
+		m.message = m.projectDetailButtonMessage()
+		return m, nil
+	case isEnter:
+		if m.projectDetailButton == 1 {
+			return m.closeProjectDetail()
+		}
+		return m.requestProjectDelete()
 	case key == "esc" || key == "b" || code == tea.KeyEscape:
-		m.projectDetailOpen = false
-		m.message = "Back to projects"
+		return m.closeProjectDetail()
 	}
 	return m, nil
+}
+
+func (m model) closeProjectDetail() (tea.Model, tea.Cmd) {
+	m.projectDetailOpen = false
+	m.projectDetailButton = 0
+	m.message = "Back to projects"
+	return m, nil
+}
+
+func (m model) projectDetailButtonMessage() string {
+	if m.projectDetailButton == 0 {
+		return "Delete selected"
+	}
+	return "Cancel selected"
+}
+
+func (m model) updateDeleteConfirmation(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
+	expectedName := firstNonEmpty(m.deleteProject.Name, m.deleteProject.ProjectName)
+	switch {
+	case key == "ctrl+c" || key == "q":
+		return m, tea.Quit
+	case key == "tab" || code == tea.KeyTab:
+		m.deleteConfirmButton = (m.deleteConfirmButton + 1) % 2
+		m.message = m.deleteConfirmButtonMessage()
+		return m, nil
+	case key == "left" || key == "up" || code == tea.KeyLeft || code == tea.KeyUp:
+		m.deleteConfirmButton = 0
+		m.message = m.deleteConfirmButtonMessage()
+		return m, nil
+	case key == "right" || key == "down" || code == tea.KeyRight || code == tea.KeyDown:
+		m.deleteConfirmButton = 1
+		m.message = m.deleteConfirmButtonMessage()
+		return m, nil
+	case isEnter:
+		if m.deleteConfirmButton == 1 {
+			return m.cancelProjectDelete()
+		}
+		if strings.TrimSpace(m.deleteConfirmText) != expectedName {
+			m.message = "Type the project name exactly to confirm delete"
+			return m, nil
+		}
+		project := m.deleteProject
+		m.deleteConfirmOpen = false
+		m.deleteProject = api.LiveProject{}
+		m.deleteConfirmText = ""
+		m.deleteConfirmButton = 0
+		m.state = stateLoading
+		m.message = "Deleting " + firstNonEmpty(project.Name, project.ProjectName, "project") + "..."
+		return m, m.deleteProjectCmd(project)
+	case key == "esc" || code == tea.KeyEscape:
+		return m.cancelProjectDelete()
+	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
+		m.deleteConfirmText = trimLastRune(m.deleteConfirmText)
+	default:
+		if len(key) == 1 && key >= " " && key <= "~" {
+			m.deleteConfirmText += key
+		}
+	}
+	m.message = "Type " + expectedName + " and press enter to delete"
+	return m, nil
+}
+
+func (m model) cancelProjectDelete() (tea.Model, tea.Cmd) {
+	m.deleteConfirmOpen = false
+	m.deleteProject = api.LiveProject{}
+	m.deleteConfirmText = ""
+	m.deleteConfirmButton = 0
+	m.message = "Delete canceled"
+	return m, nil
+}
+
+func (m model) deleteConfirmButtonMessage() string {
+	if m.deleteConfirmButton == 0 {
+		return "Delete selected"
+	}
+	return "Esc selected"
 }
 
 func (f databaseDeployForm) engine() deploy.EngineOption {
@@ -719,6 +994,13 @@ func (f databaseDeployForm) version() string {
 
 func (f databaseDeployForm) size() string {
 	return deploy.SizeOptions[clamp(f.sizeIndex, 0, len(deploy.SizeOptions)-1)]
+}
+
+func (f databaseDeployForm) modeOrDefault() string {
+	if strings.TrimSpace(f.mode) == "" {
+		return "single-instance"
+	}
+	return strings.TrimSpace(f.mode)
 }
 
 func (f databaseDeployForm) input() (api.CreateDatabaseDeploymentInput, error) {
@@ -741,12 +1023,30 @@ func (f databaseDeployForm) input() (api.CreateDatabaseDeploymentInput, error) {
 	return api.CreateDatabaseDeploymentInput{
 		ProjectName:    projectName,
 		Engine:         f.engine().ID,
-		DeploymentMode: "single-instance",
+		DeploymentMode: f.modeOrDefault(),
 		DatabaseName:   databaseName,
 		Username:       username,
 		Password:       password,
 		Version:        f.version(),
 		SizeProfile:    f.size(),
+	}, nil
+}
+
+func (f databaseDeployForm) clusterInput() (api.CreateClusterDeploymentInput, error) {
+	input, err := f.input()
+	if err != nil {
+		return api.CreateClusterDeploymentInput{}, err
+	}
+	return api.CreateClusterDeploymentInput{
+		Namespace:     "default",
+		ProjectName:   input.ProjectName,
+		Engine:        input.Engine,
+		DatabaseName:  input.DatabaseName,
+		Username:      input.Username,
+		Password:      input.Password,
+		Version:       input.Version,
+		SizeProfile:   input.SizeProfile,
+		TargetCluster: "k8s-cluster2",
 	}, nil
 }
 
@@ -811,6 +1111,13 @@ func (m model) activateNavigationItem() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) selectNavigationShortcut(page appPage) {
+	m.navCursor = m.navigationIndexByPage(page)
+	m.focus = focusSidebar
+	item := m.selectedNavigationItem()
+	m.message = "Press enter to open " + item.label
+}
+
 func (m model) activateDeploymentFeature() (tea.Model, tea.Cmd) {
 	feature := m.selectedDeploymentFeature()
 	if !feature.Ready {
@@ -819,6 +1126,9 @@ func (m model) activateDeploymentFeature() (tea.Model, tea.Cmd) {
 	}
 	if feature.Label == "Single database" {
 		return m.openDatabaseDeployForm(), nil
+	}
+	if feature.Label == "Database cluster" {
+		return m.openDatabaseClusterDeployForm(), nil
 	}
 	if feature.Label == "Monolithic" {
 		return m.openMonolithicDeployForm(), nil
@@ -833,7 +1143,26 @@ func (m model) openProjectDetail() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.projectDetailOpen = true
+	m.projectDetailButton = 0
 	m.focus = focusList
+	return m, nil
+}
+
+func (m model) requestProjectDelete() (tea.Model, tea.Cmd) {
+	project, ok := m.selectedProject()
+	if !ok {
+		m.message = "No project selected"
+		return m, nil
+	}
+	if !api.ProjectKindSupportsDelete(project.Kind) {
+		m.message = "Delete is not available for " + firstNonEmpty(project.Kind, "this") + " projects"
+		return m, nil
+	}
+	m.deleteConfirmOpen = true
+	m.deleteProject = project
+	m.deleteConfirmText = ""
+	m.deleteConfirmButton = 0
+	m.message = fmt.Sprintf("Type %s and press enter to delete.", firstNonEmpty(project.Name, project.ProjectName, "project"))
 	return m, nil
 }
 
@@ -846,42 +1175,51 @@ func (m model) openDatabaseDeployForm() model {
 	return m
 }
 
+func (m model) openDatabaseClusterDeployForm() model {
+	m.navCursor = m.navigationIndexByPage(pageDeployment)
+	m.dbFormOpen = true
+	m.monolithFormOpen = false
+	m.dbForm = newDatabaseDeployForm()
+	m.dbForm.mode = "cluster"
+	m.message = "Create a highly available database cluster"
+	return m
+}
+
 func (m model) openMonolithicDeployForm() model {
 	m.navCursor = m.navigationIndexByPage(pageDeployment)
 	m.dbFormOpen = false
 	m.monolithFormOpen = true
 	m.monolithForm = newMonolithicDeployForm()
-	if m.monolithForm.repoURL == "" {
-		m.message = "No Git origin detected. Enter a repository URL before deploying."
-	} else {
-		m.message = "Deploy the current project from Git"
-	}
+	m.message = "Paste or enter a Git remote URL before deploying."
 	return m
 }
 
 func (m *model) setPage(page appPage) {
 	m.page = page
 	m.projectDetailOpen = false
+	m.projectDetailButton = 0
+	m.deleteConfirmOpen = false
+	m.deleteProject = api.LiveProject{}
+	m.deleteConfirmText = ""
+	m.deleteConfirmButton = 0
 	m.dbFormOpen = false
 	m.monolithFormOpen = false
 	m.navCursor = m.navigationIndexByPage(page)
 	if page == pageDeployment {
 		m.deployCursor = 0
 	}
-	if page != pageProjects {
-		m.filtering = false
-		m.focus = focusList
-	}
+	m.filtering = false
+	m.focus = focusList
 	m.message = m.pageMessage()
 }
 
 func (m *model) toggleTheme() {
-	m.darkMode = !m.darkMode
+	m.themeIndex = settings.NormalizeThemeIndex(m.themeIndex + 1)
 	m.message = "Theme changed to " + m.themeLabel()
 }
 
 func (m model) themeLabel() string {
-	return settings.ThemeLabel(m.darkMode)
+	return settings.ThemeLabel(m.themeIndex)
 }
 
 func (m model) logout() (tea.Model, tea.Cmd) {
@@ -890,6 +1228,11 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.tokens = auth.TokenSet{}
 	m.projects = nil
 	m.projectDetailOpen = false
+	m.projectDetailButton = 0
+	m.deleteConfirmOpen = false
+	m.deleteProject = api.LiveProject{}
+	m.deleteConfirmText = ""
+	m.deleteConfirmButton = 0
 	m.dbFormOpen = false
 	m.monolithFormOpen = false
 	m.deployLogOpen = false
@@ -903,7 +1246,7 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.filtering = false
 	m.navCursor = 0
 	m.page = pageProjects
-	m.focus = focusList
+	m.focus = focusSidebar
 	m.launcherCursor = 0
 	m.lastRefreshed = time.Time{}
 	m.state = stateLoggedOut
@@ -942,6 +1285,34 @@ func (m model) fetchDatabaseDeploymentCmd(deploymentID string, delay time.Durati
 			deployment, err = projectsAPI.FetchDatabaseDeployment(ctx, tokens.AccessToken, deploymentID)
 		}
 		return databaseDeploymentPollMsg{tokens: tokens, deployment: deployment, err: err}
+	}
+}
+
+func (m model) deleteProjectCmd(project api.LiveProject) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return projectDeleteResultMsg{tokens: tokens, project: project, err: err}
+			}
+		}
+
+		err = projectsAPI.DeleteLiveProject(ctx, tokens.AccessToken, project)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return projectDeleteResultMsg{tokens: tokens, project: project, err: err}
+			}
+			err = projectsAPI.DeleteLiveProject(ctx, tokens.AccessToken, project)
+		}
+		return projectDeleteResultMsg{tokens: tokens, project: project, err: err}
 	}
 }
 
@@ -1037,7 +1408,11 @@ func (m model) selectedProject() (api.LiveProject, bool) {
 
 func Run() error {
 	cfg, configErr := config.LoadConfig()
-	p := tea.NewProgram(initialModel(cfg, configErr))
+	options := []tea.ProgramOption{}
+	if width, height, err := charmterm.GetSize(os.Stdout.Fd()); err == nil && width > 0 && height > 0 {
+		options = append(options, tea.WithWindowSize(width, height))
+	}
+	p := tea.NewProgram(initialModel(cfg, configErr), options...)
 	_, err := p.Run()
 	return err
 }
@@ -1079,6 +1454,15 @@ func wrapIndex(index, length int) int {
 func trimLastRune(value string) string {
 	runes := []rune(value)
 	if len(runes) == 0 {
+		return value
 	}
 	return string(runes[:len(runes)-1])
+}
+
+func sanitizePastedFieldText(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\t", " ")
+	return strings.TrimSpace(value)
 }

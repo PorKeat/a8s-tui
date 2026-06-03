@@ -163,50 +163,43 @@ func sideSectionLine(text string, width int) string {
 func sidebarNavLine(item navigationItem, width int, active, current bool) []string {
 	rowBg := lipgloss.Color(colorBgSide)
 	labelStyle := styleSideText
-	keyStyle := styleSideMuted
 	iconBg := colorBgSide
-	markerStyle := lipgloss.NewStyle().
-		Background(rowBg).
-		Foreground(lipgloss.Color(colorText))
-	prefix := markerStyle.Render("   ")
+	border := lipgloss.Color(colorBorder)
+	prefix := "  "
 	if active {
-		rowBg = lipgloss.Color(colorBgActive)
-		iconBg = colorBgActive
-		markerStyle = lipgloss.NewStyle().
-			Background(rowBg).
-			Foreground(lipgloss.Color(colorPrimary))
-		rowSpaceStyle := lipgloss.NewStyle().
-			Background(rowBg).
-			Foreground(lipgloss.Color(colorText))
-		prefix = rowSpaceStyle.Render(" ") + markerStyle.Render("▌") + rowSpaceStyle.Render(" ")
+		border = lipgloss.Color(colorPrimary)
+		prefix = "> "
 		labelStyle = lipgloss.NewStyle().
 			Background(rowBg).
 			Foreground(lipgloss.Color(colorPrimary)).
 			Bold(true)
-		keyStyle = lipgloss.NewStyle().
+	} else if current {
+		labelStyle = lipgloss.NewStyle().
 			Background(rowBg).
-			Foreground(lipgloss.Color(colorPrimary)).
-			Bold(true)
+			Foreground(lipgloss.Color(colorPrimary))
 	}
 	rowPad := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText))
-	left := prefix +
+	left := rowPad.Render(prefix) +
 		dashboardItemIcon(item, iconBg) +
 		rowPad.Render("  ") +
-		labelStyle.Render(truncatePlain(item.label, max(width-15, 4)))
-	right := keyStyle.Render(item.key + "  ")
-	contentWidth := max(width-2, 8)
-	lead := styleSide.Render(" ")
-	if active {
-		contentWidth = max(width, 8)
-		lead = ""
-	}
-	gap := rowPad.Render(spaces(max(contentWidth-visibleLen(left)-visibleLen(right), 0)))
+		labelStyle.Render(truncatePlain(item.label, max(width-12, 4)))
+	contentWidth := max(width-4, 8)
+	gap := rowPad.Render(spaces(max(contentWidth-visibleLen(left), 0)))
 	box := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Padding(0, 1).
 		Width(contentWidth).
-		Render(left + gap + right)
-	return []string{sideContentLine(lead+box, width)}
+		Render(left + gap)
+	lines := strings.Split(box, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, sideContentLine("  "+line, width))
+	}
+	return out
 }

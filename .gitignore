@@ -19,3 +19,4 @@ a8s-tui
 dist/
 coverage.out
 .release_version
+.gocache/

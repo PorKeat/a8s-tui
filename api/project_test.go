@@ -197,6 +197,72 @@ func TestCreateDatabaseDeployment(t *testing.T) {
 	}
 }
 
+func TestCreateClusterDeployment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/cluster/namespaces/default/cluster-deployments" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q", r.Method)
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		database, ok := payload["database"].(map[string]any)
+		if !ok {
+			t.Fatalf("database payload = %#v", payload["database"])
+		}
+		cluster, ok := payload["cluster"].(map[string]any)
+		if !ok {
+			t.Fatalf("cluster payload = %#v", payload["cluster"])
+		}
+		secrets, ok := payload["secrets"].(map[string]any)
+		if !ok {
+			t.Fatalf("secrets payload = %#v", payload["secrets"])
+		}
+		if payload["projectName"] != "orders-ha" || database["engine"] != "POSTGRESQL" || database["databaseName"] != "ordersdb" || database["username"] != "orders_user" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		if cluster["name"] != "orders-ha" || secrets["pgPassword"] != "secret" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"clusterId":   "cluster-1",
+			"releaseName": "orders-ha",
+			"namespace":   "default",
+			"engine":      "POSTGRESQL",
+			"status":      "DEPLOYED",
+			"stdout":      "helm upgrade ok",
+			"successful":  true,
+		})
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	deployment, err := client.CreateClusterDeployment(context.Background(), "access", CreateClusterDeploymentInput{
+		Namespace:    "default",
+		ProjectName:  "orders-ha",
+		Engine:       "postgresql",
+		DatabaseName: "ordersdb",
+		Username:     "orders_user",
+		Password:     "secret",
+		Version:      "18",
+		SizeProfile:  "small",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ClusterID != "cluster-1" || deployment.Status != "DEPLOYED" || deployment.Stdout != "helm upgrade ok" {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
 func TestCreateMonolithicDeployment(t *testing.T) {
 	var sawProfile bool
 	var sawCreate bool
@@ -285,6 +351,75 @@ func TestFetchDatabaseDeployment(t *testing.T) {
 	}
 	if deployment.ID != "db-1" || deployment.StatusLog == "" || deployment.StatusMessage == "" {
 		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
+func TestDeleteLiveProjectRoutesByKind(t *testing.T) {
+	tests := []struct {
+		name        string
+		project     LiveProject
+		wantPaths   []string
+		wantQueries []string
+	}{
+		{
+			name:      "database",
+			project:   LiveProject{Kind: "database", ID: "fallback-db", DatabaseDeploymentIDs: []string{"db-1", "db-2"}},
+			wantPaths: []string{"/api/v1/database-deployments/db-1", "/api/v1/database-deployments/db-2"},
+		},
+		{
+			name:      "monolith",
+			project:   LiveProject{Kind: "monolith", ID: "project-1"},
+			wantPaths: []string{"/api/v1/projects/project-1"},
+		},
+		{
+			name:      "microservices",
+			project:   LiveProject{Kind: "microservices", ID: "project-2"},
+			wantPaths: []string{"/api/v1/projects/microservices/project-2"},
+		},
+		{
+			name:        "dbcluster",
+			project:     LiveProject{Kind: "dbcluster", ID: "cluster-1", Namespace: "ns-a"},
+			wantPaths:   []string{"/api/v1/cluster/namespaces/ns-a/clusters/cluster-1"},
+			wantQueries: []string{"deleteData=true"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPaths []string
+			var gotQueries []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Fatalf("method = %q", r.Method)
+				}
+				if r.Header.Get("Authorization") != "Bearer access" {
+					t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+				}
+				gotPaths = append(gotPaths, r.URL.Path)
+				gotQueries = append(gotQueries, r.URL.RawQuery)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			client := NewProjectClient(server.URL)
+			client.client = server.Client()
+			if err := client.DeleteLiveProject(context.Background(), "access", tt.project); err != nil {
+				t.Fatal(err)
+			}
+			if len(gotPaths) != len(tt.wantPaths) {
+				t.Fatalf("paths = %#v", gotPaths)
+			}
+			for i := range tt.wantPaths {
+				if gotPaths[i] != tt.wantPaths[i] {
+					t.Fatalf("paths = %#v", gotPaths)
+				}
+			}
+			for i := range tt.wantQueries {
+				if gotQueries[i] != tt.wantQueries[i] {
+					t.Fatalf("queries = %#v", gotQueries)
+				}
+			}
+		})
 	}
 }
 

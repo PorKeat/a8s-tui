@@ -12,8 +12,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-func applyTheme(dark bool) {
-	palette := uitheme.PaletteFor(dark)
+func applyTheme(index int) {
+	palette := uitheme.PaletteForIndex(index)
 	colorPrimary = palette.Primary
 	colorBgMain = palette.BgMain
 	colorBgSide = palette.BgSide
@@ -25,20 +25,20 @@ func applyTheme(dark bool) {
 	colorTitle = palette.Title
 	colorBorder = palette.Border
 
-	if dark {
-		fgBlue = ansiFg("#7aaeff")
-		fgPurple = ansiFg("#b59dff")
-		fgAccent = ansiFg("#5fd7ff")
-		fgWarn = ansiFg("#ffe066")
-		fgError = ansiFg("#ff8787")
-		fgGreen = ansiFg("#77f27f")
-	} else {
+	if uitheme.ThemeLabel(index) == "Light" {
 		fgBlue = ansiFg("#2f6fbd")
 		fgPurple = ansiFg("#765bd8")
 		fgAccent = ansiFg("#0b7285")
 		fgWarn = ansiFg("#a05a00")
 		fgError = ansiFg("#c92a2a")
 		fgGreen = ansiFg("#2f9e44")
+	} else {
+		fgBlue = ansiFg("#7aaeff")
+		fgPurple = ansiFg("#b59dff")
+		fgAccent = ansiFg("#5fd7ff")
+		fgWarn = ansiFg("#ffe066")
+		fgError = ansiFg("#ff8787")
+		fgGreen = ansiFg("#77f27f")
 	}
 
 	fgLogo = ansiFg(colorPrimary)
@@ -96,7 +96,7 @@ func applyTheme(dark bool) {
 }
 
 func (m model) View() tea.View {
-	applyTheme(m.darkMode)
+	applyTheme(m.themeIndex)
 	width := max(m.width, 80)
 	height := max(m.height, 24)
 	if m.state != stateReady {
@@ -105,31 +105,7 @@ func (m model) View() tea.View {
 	if m.deployLogOpen {
 		return m.databaseDeployLogView(width, height)
 	}
-	bodyHeight := max(height-1, 18)
-	sidebarWidth := 31
-	if width < 96 {
-		sidebarWidth = 25
-	}
-	mainWidth := max(width-sidebarWidth, 48)
-
-	var b strings.Builder
-	sidebar := m.renderDashboardSidebar(sidebarWidth, bodyHeight)
-	main := m.renderDashboardMain(mainWidth, bodyHeight)
-	for i := 0; i < bodyHeight; i++ {
-		b.WriteString(backgroundLine(sidebar[i], sidebarWidth, bgSide))
-		b.WriteString(backgroundLine(main[i], mainWidth, bgDark))
-		b.WriteString("\n")
-	}
-	if m.dbFormOpen {
-		b.WriteString(m.databaseFormStatusline(width))
-	} else {
-		b.WriteString(m.statusline(width))
-	}
-
-	view := tea.NewView(b.String())
-	view.AltScreen = true
-	view.WindowTitle = "A8S TUI"
-	return view
+	return m.modernDashboardView(width, height)
 }
 
 func (m model) launcherView(width, height int) tea.View {
@@ -513,23 +489,20 @@ func launcherBlock(icon, label, key string, width int, active bool) []string {
 	prefix := "   "
 	borderColor := fgBorder
 	labelColor := fgText
-	keyColor := fgMuted
 	if active {
 		prefix = fgKey + "> " + reset
 		borderColor = bold + fgLogo
 		labelColor = bold + fgLogo
-		keyColor = fgKey
 	}
 	barWidth := max(width-visibleLen(prefix), 12)
 	innerWidth := max(barWidth-2, 10)
-	labelWidth := max(innerWidth-12, 1)
+	labelWidth := max(innerWidth-7, 1)
 	label = truncatePlain(label, labelWidth)
-	keyText := keyColor + key + reset
 	iconText := fgAccent + icon + reset
 	top := spaces(visibleLen(prefix)) + borderColor + "╭" + strings.Repeat("─", innerWidth) + "╮" + reset
 	middleText := " " + iconText + "  " + labelColor + label + reset
 	middle := prefix + borderColor + "│" + reset + middleText
-	middle += spaces(max(innerWidth-visibleLen(middleText)-visibleLen(keyText)-1, 0)) + keyText + " " + borderColor + "│" + reset
+	middle += spaces(max(innerWidth-visibleLen(middleText)-1, 0)) + borderColor + "│" + reset
 	bottom := spaces(visibleLen(prefix)) + borderColor + "╰" + strings.Repeat("─", innerWidth) + "╯" + reset
 	return []string{
 		pad(top, width),
@@ -946,7 +919,7 @@ func (m model) statusline(width int) string {
 	if !m.lastRefreshed.IsZero() {
 		count += "refreshed " + m.lastRefreshed.Format("15:04:05") + " "
 	}
-	right := bgBar + fgMuted + " arrows/jk move  tab focus  / filter  r refresh  o logout  q quit " + reset
+	right := bgBar + fgMuted + " arrows/jk move  enter open  / filter  r refresh  o logout  q quit " + reset
 	return left + bgBar + fgMuted + count + reset + fill(width-visibleLen(left)-len(count)-visibleLen(right), bgBar+" "+reset) + right
 }
 
@@ -1049,7 +1022,20 @@ func pad(text string, width int) string {
 }
 
 func backgroundLine(text string, width int, bg string) string {
+	text = restoreBackground(text, bg)
 	return bg + strings.ReplaceAll(pad(text, width), reset, reset+bg) + reset
+}
+
+func restoreBackground(content, bg string) string {
+	replacer := strings.NewReplacer(
+		"\x1b[0m", "\x1b[0m"+bg,
+		"\x1b[m", "\x1b[m"+bg,
+		"\x1b[39m", "\x1b[39m"+bg,
+		"\x1b[49m", "\x1b[49m"+bg,
+		"\x1b[39;49m", "\x1b[39;49m"+bg,
+		"\x1b[22m", "\x1b[22m"+bg,
+	)
+	return replacer.Replace(content)
 }
 
 func ansiFg(hex string) string {

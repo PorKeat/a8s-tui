@@ -1,14 +1,15 @@
 package auth
 
 import (
-	"github.com/PorKeat/a8s-tui/config"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,9 +17,14 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/PorKeat/a8s-tui/config"
 )
 
 const tokenRefreshSkew = 30 * time.Second
+
+//go:embed a8s-logo.avif
+var callbackLogoAVIF []byte
 
 type TokenSet struct {
 	AccessToken  string
@@ -278,7 +284,13 @@ func callbackHandler(path, expectedState string, result chan<- callbackResult) h
 		}
 		query := r.URL.Query()
 		if query.Get("state") != expectedState {
-			http.Error(w, "Invalid login state. You can close this tab and retry in the TUI.", http.StatusBadRequest)
+			writeLoginCallbackHTML(w, http.StatusBadRequest, loginCallbackPage{
+				Status:      "Login blocked",
+				Title:       "Invalid login state",
+				Description: "This browser callback did not match the login session started by your terminal.",
+				Detail:      "Close this tab and start login again from A8S TUI.",
+				Tone:        "error",
+			})
 			result <- callbackResult{err: errors.New("Keycloak callback state did not match")}
 			return
 		}
@@ -287,114 +299,327 @@ func callbackHandler(path, expectedState string, result chan<- callbackResult) h
 			if message == "" {
 				message = authErr
 			}
-			http.Error(w, "Keycloak login failed. You can close this tab and retry in the TUI.", http.StatusBadRequest)
+			writeLoginCallbackHTML(w, http.StatusBadRequest, loginCallbackPage{
+				Status:      "Login failed",
+				Title:       "Keycloak login failed",
+				Description: "Keycloak returned an error before A8S TUI could finish authentication.",
+				Detail:      message,
+				Tone:        "error",
+			})
 			result <- callbackResult{err: errors.New(message)}
 			return
 		}
 		code := strings.TrimSpace(query.Get("code"))
 		if code == "" {
-			http.Error(w, "Missing authorization code. You can close this tab and retry in the TUI.", http.StatusBadRequest)
+			writeLoginCallbackHTML(w, http.StatusBadRequest, loginCallbackPage{
+				Status:      "Login incomplete",
+				Title:       "Missing authorization code",
+				Description: "The callback reached A8S TUI, but Keycloak did not include an authorization code.",
+				Detail:      "Close this tab and retry login from your terminal.",
+				Tone:        "error",
+			})
 			result <- callbackResult{err: errors.New("Keycloak callback did not include an authorization code")}
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, loginSuccessHTML())
+		writeLoginCallbackHTML(w, http.StatusOK, loginCallbackPage{
+			Status:      "Authenticated",
+			Title:       "Login successful",
+			Description: "You are already logged in to A8S TUI.",
+			Detail:      "You can close this tab and return to your terminal.",
+			Tone:        "success",
+		})
 		result <- callbackResult{code: code}
 	})
 }
 
-func loginSuccessHTML() string {
-	return `<!doctype html>
+type loginCallbackPage struct {
+	Status      string
+	Title       string
+	Description string
+	Detail      string
+	Tone        string
+}
+
+func writeLoginCallbackHTML(w http.ResponseWriter, statusCode int, page loginCallbackPage) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(statusCode)
+	fmt.Fprint(w, loginCallbackHTML(page))
+}
+
+func loginCallbackHTML(page loginCallbackPage) string {
+	if page.Tone == "" {
+		page.Tone = "success"
+	}
+	status := html.EscapeString(page.Status)
+	title := html.EscapeString(page.Title)
+	description := html.EscapeString(page.Description)
+	detail := html.EscapeString(page.Detail)
+	tone := html.EscapeString(page.Tone)
+	return fmt.Sprintf(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>A8S TUI Login Successful</title>
+  <title>A8S TUI - %s</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #130e0b;
-      --panel: #2b221b;
-      --panel-soft: #231b16;
-      --text: #f5f1eb;
-      --muted: #9f9186;
-      --accent: #f56618;
-      --border: #5b4638;
-      --ok: #77f27f;
+      --page: #16110d;
+      --panel: #211812;
+      --panel-soft: #2b2018;
+      --text: #fff8f0;
+      --muted: #c4aa98;
+      --subtle: #8c7465;
+      --accent: #ff6b00;
+      --accent-soft: rgba(255, 107, 0, .14);
+      --accent-border: rgba(255, 107, 0, .42);
+      --border: rgba(255, 248, 240, .12);
+      --ok: #42e57b;
+      --error: #ff6f83;
     }
     * { box-sizing: border-box; }
+    html { min-height: 100vh; background: var(--page); }
     body {
       margin: 0;
       min-height: 100vh;
       display: grid;
       place-items: center;
+      padding: 24px;
       background:
-        linear-gradient(180deg, rgba(245, 102, 24, .08), transparent 34%),
-        var(--bg);
+        linear-gradient(135deg, rgba(255, 107, 0, .16), transparent 340px),
+        linear-gradient(180deg, #1d1510 0, var(--page) 420px);
       color: var(--text);
-      font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font: 16px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, #000, transparent);
+    }
+    .shell {
+      position: relative;
+      width: min(920px, calc(100vw - 48px));
+    }
+    .brandbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-weight: 800;
+    }
+    .brandbar img {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      object-fit: contain;
+      background: #fff8f0;
+      padding: 7px;
+    }
+    .brandbar span {
+      color: var(--accent);
+      letter-spacing: .18em;
+      text-transform: uppercase;
     }
     main {
-      width: min(92vw, 640px);
-      padding: 42px;
-      border: 1px solid var(--border);
+      overflow: hidden;
+      border: 1px solid var(--accent-border);
       background: var(--panel);
-      text-align: center;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
+      border-radius: 26px;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, .38);
     }
-    .brand {
-      margin: 0 0 28px;
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 26px 30px;
+      background:
+        linear-gradient(90deg, rgba(255, 107, 0, .22), transparent),
+        var(--panel-soft);
+      border-bottom: 1px solid var(--border);
+    }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 68px;
+      height: 68px;
+      border-radius: 20px;
+      background: #fff8f0;
+      border: 1px solid rgba(255, 107, 0, .34);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.36);
+    }
+    .mark img {
+      width: 46px;
+      height: 46px;
+      object-fit: contain;
+    }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .product {
+      margin: 0;
+      color: var(--text);
+      font-size: 25px;
+      font-weight: 800;
+    }
+    .status {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      padding: 9px 14px;
+      border-radius: 999px;
+      background: var(--accent-soft);
       color: var(--accent);
       font-size: 13px;
       font-weight: 800;
-      letter-spacing: .18em;
     }
-    .mark {
-      width: 64px;
-      height: 64px;
-      margin: 0 auto 24px;
-      border: 1px solid rgba(119, 242, 127, .45);
-      background: var(--panel-soft);
+    .status::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--ok);
+      box-shadow: 0 0 18px var(--ok);
+    }
+    main[data-tone="error"] .status {
+      background: rgba(255, 111, 131, .14);
+      color: var(--error);
+    }
+    main[data-tone="error"] .status::before {
+      background: var(--error);
+      box-shadow: 0 0 18px var(--error);
+    }
+    .content {
       display: grid;
-      place-items: center;
-      color: var(--ok);
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: .08em;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 24px;
+      padding: 34px 30px 30px;
     }
     h1 {
-      margin: 0 0 12px;
+      margin: 0 0 16px;
       color: var(--text);
-      font-size: 28px;
-      letter-spacing: 0;
+      font-size: 48px;
+      line-height: 1.02;
     }
-    p {
-      margin: 0 0 6px;
+    .lead {
+      max-width: 600px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .detail {
+      margin-top: 26px;
+      padding: 18px 20px;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 15px;
+    }
+    .next {
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: rgba(255,255,255,.035);
+      padding: 22px;
+      align-self: stretch;
+    }
+    .next h2 {
+      margin: 0 0 14px;
+      color: var(--text);
+      font-size: 16px;
+    }
+    .next p {
+      margin: 0 0 18px;
       color: var(--muted);
     }
-    strong {
-      color: var(--accent);
-      font-weight: 700;
+    .terminal {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: var(--accent-soft);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-weight: 800;
     }
-    .rule {
-      width: 88px;
-      height: 2px;
-      margin: 24px auto 0;
-      background: var(--accent);
+    .terminal span {
+      color: var(--accent);
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 30px;
+      border-top: 1px solid var(--border);
+      color: var(--subtle);
+      font-size: 13px;
+    }
+    .footer strong { color: var(--accent); }
+    @media (max-width: 760px) {
+      body { padding: 16px; }
+      .shell { width: calc(100vw - 32px); }
+      .header { align-items: flex-start; flex-wrap: wrap; padding: 22px; }
+      .status { margin-left: 0; }
+      .content { grid-template-columns: 1fr; padding: 28px 22px 22px; }
+      h1 { font-size: 36px; }
+      .footer { flex-direction: column; padding: 16px 22px; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <div class="brand">AUTONOMOUS</div>
-    <div class="mark">OK</div>
-    <h1>Login successful</h1>
-    <p>You are already logged in to <strong>A8S TUI</strong>.</p>
-    <p>You can close this tab and return to your terminal.</p>
-    <div class="rule"></div>
-  </main>
+  <div class="shell">
+    <div class="brandbar">
+      <img src="%s" alt="A8S logo">
+      <div><span>A8S</span> Autonomous</div>
+    </div>
+    <main data-tone="%s">
+      <section class="header">
+        <div class="mark"><img src="%s" alt="A8S logo"></div>
+        <div>
+          <p class="eyebrow">Keycloak callback</p>
+          <p class="product">A8S TUI</p>
+        </div>
+        <div class="status">%s</div>
+      </section>
+      <section class="content">
+        <div>
+          <h1>%s</h1>
+          <p class="lead">%s</p>
+          <div class="detail">%s</div>
+        </div>
+        <aside class="next">
+          <h2>Return to terminal</h2>
+          <p>Your browser login is complete. A8S TUI will continue from the terminal session that opened this page.</p>
+          <div class="terminal"><span>$</span> a8s-cli</div>
+        </aside>
+      </section>
+      <section class="footer">
+        <span>localhost callback complete</span>
+        <span><strong>Next:</strong> return to your terminal</span>
+      </section>
+    </main>
+  </div>
 </body>
-</html>`
+</html>`, title, callbackLogoDataURI(), tone, callbackLogoDataURI(), status, title, description, detail)
+}
+
+func callbackLogoDataURI() string {
+	return "data:image/avif;base64," + base64.StdEncoding.EncodeToString(callbackLogoAVIF)
 }
 
 func randomURLToken(size int) (string, error) {

@@ -26,7 +26,13 @@ func (m model) renderDashboardDeployment(width, height int) []string {
 
 func (m model) renderDashboardDatabaseDeployForm(width, height int) []string {
 	lines := make([]string, 0, height)
-	header := dashboardHeader("Single database", "Create a single-instance database deployment.", width)
+	title := "Single database"
+	lead := "Create a single-instance database deployment."
+	if m.dbForm.modeOrDefault() == "cluster" {
+		title = "Database cluster"
+		lead = "Create a highly available database cluster."
+	}
+	header := dashboardHeader(title, lead, width)
 	lines = append(lines, header...)
 	cardLines := databaseDeployFormCard(m, width)
 	viewportHeight := max(height-len(lines), 1)
@@ -180,7 +186,7 @@ func databaseDeployFormCard(m model, width int) []string {
 	mutedStyle := mainMutedStyle(colorBgCard)
 	lines := []string{
 		cardContentLine(card, "", width),
-		cardContentLine(card, "  "+title.Render("Deploy Database")+bodyStyle.Render("  ")+mutedStyle.Render("single-instance"), width),
+		cardContentLine(card, "  "+title.Render(databaseDeployTitle(m))+bodyStyle.Render("  ")+mutedStyle.Render(m.dbForm.modeOrDefault()), width),
 		cardContentLine(card, "  "+mutedStyle.Render("Use arrows or j/k to move. Left/right changes choices."), width),
 		cardContentLine(card, "", width),
 	}
@@ -205,13 +211,20 @@ func databaseDeployFormCard(m model, width int) []string {
 	}
 	lines = append(lines, databaseDeploySubmitBox(card, cardWidth, width, m)...)
 	lines = append(lines, cardContentLine(card, "", width))
-	payload := fmt.Sprintf("Payload: %s / single-instance / %s / %s", m.dbForm.engine().ID, m.dbForm.version(), m.dbForm.size())
+	payload := fmt.Sprintf("Payload: %s / %s / %s / %s", m.dbForm.engine().ID, m.dbForm.modeOrDefault(), m.dbForm.version(), m.dbForm.size())
 	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(payload, cardWidth-4)), width))
 	if m.message != "" {
 		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
 	}
 	lines = append(lines, cardContentLine(card, "", width))
 	return lines
+}
+
+func databaseDeployTitle(m model) string {
+	if m.dbForm.modeOrDefault() == "cluster" {
+		return "Deploy Database Cluster"
+	}
+	return "Deploy Database"
 }
 
 func monolithicDeployFormCard(m model, width int) []string {
@@ -351,7 +364,11 @@ func databaseDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model)
 		border = lipgloss.Color(colorPrimary)
 		labelStyle = mainPrimaryStyle(colorBgCard)
 	}
-	label := labelStyle.Render("Deploy")
+	labelText := "Deploy"
+	if m.dbForm.modeOrDefault() == "cluster" {
+		labelText = "Deploy Cluster"
+	}
+	label := labelStyle.Render(labelText)
 	box := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText)).

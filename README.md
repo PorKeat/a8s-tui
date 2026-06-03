@@ -150,9 +150,9 @@ a8s-cli
 - **Authentication**: Seamless Keycloak integration with automatic token refreshing.
 - **Projects Dashboard**: View live database deployments, monoliths, and microservice workspaces.
 - **Project Details**: Get connection profiles, hostnames, ports, and JDBC URLs instantly.
-- **Database Deployments**: Create single-instance databases (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
+- **Database Deployments**: Create single-instance databases and database clusters (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
 - **Live Logs**: Watch real-time deployment logs stream directly to your terminal.
-- **Customizable UI**: Fully integrated light/dark mode and support for icon-less environments (set `A8S_NO_ICONS=true`).
+- **Customizable UI**: Fully integrated themes (Dark, Light, Orange, Green, Ocean, Rose) and support for icon-less environments (set `A8S_NO_ICONS=true`).
 
 ## Keyboard Shortcuts
 
@@ -160,21 +160,24 @@ The UI is highly responsive and designed for power users.
 
 **Global Navigation:**
 - `Up/Down` or `j/k`: Move cursor
-- `Left/Right` or `Tab`: Switch focus between Sidebar and Main Content
+- `Tab`: Switch focus between Sidebar and Main Content
 - `Enter`: Select or open
 - `q` or `ctrl+c`: Quit
 - `esc`: Go back
 
 **Shortcuts (When Ready):**
-- `p`: Open Projects
-- `d`: Open Deployments
-- `i`: Open Image Scanner
-- `g`: Open Logs
-- `m`: Open Monitoring
-- `u` or `s`: Open User Settings
+- `p`: Select Projects, then `Enter` opens it
+- `d`: Select Deployments, then `Enter` opens it
+- `i`: Select Image Scanner, then `Enter` opens it
+- `g`: Select Logs, then `Enter` opens it
+- `m`: Select Monitoring, then `Enter` opens it
+- `u` or `s`: Select User Settings, then `Enter` opens it
 - `r`: Refresh data
 - `/`: Filter projects
 - `o`: Logout
+
+**User Settings:**
+- `Enter`, `Space`, or `t`: Cycle through available themes
 
 ## Development
 

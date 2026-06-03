@@ -63,6 +63,20 @@ type CreateDatabaseDeploymentInput struct {
 	SizeProfile    string `json:"sizeProfile"`
 }
 
+type CreateClusterDeploymentInput struct {
+	Namespace       string
+	ProjectName     string
+	Engine          string
+	DatabaseName    string
+	Username        string
+	Password        string
+	Version         string
+	SizeProfile     string
+	TargetCluster   string
+	StorageSize     string
+	PublicHostnames []string
+}
+
 type CreateMonolithicDeploymentInput struct {
 	ProjectName       string `json:"projectName"`
 	RepoURL           string `json:"repoUrl"`
@@ -107,6 +121,27 @@ type DatabaseDeploymentRecord struct {
 	StatusLog             string
 }
 
+type ClusterDeploymentRecord struct {
+	ClusterID         string
+	ReleaseName       string
+	Name              string
+	Namespace         string
+	TargetClusterName string
+	Engine            string
+	Status            string
+	StatusMessage     string
+	ServiceHost       string
+	ServicePort       int
+	TLSEnabled        bool
+	Command           []string
+	Stdout            string
+	Stderr            string
+	Successful        bool
+	ExitCode          int
+	StartedAt         string
+	FinishedAt        string
+}
+
 type ProjectClient struct {
 	baseURL string
 	client  *http.Client
@@ -115,7 +150,7 @@ type ProjectClient struct {
 func NewProjectClient(baseURL string) ProjectClient {
 	return ProjectClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: 20 * time.Second},
+		client:  &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -241,6 +276,46 @@ func (c ProjectClient) CreateDatabaseDeployment(
 	return normalizeDatabaseDeployment(payload), nil
 }
 
+func (c ProjectClient) CreateClusterDeployment(
+	ctx context.Context,
+	token string,
+	input CreateClusterDeploymentInput,
+) (ClusterDeploymentRecord, error) {
+	namespace := firstNonEmpty(input.Namespace, "default")
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "cluster-deployments")
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	body := buildClusterDeploymentPayload(input, namespace)
+	payloadBytes, err := json.Marshal(body)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ClusterDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ClusterDeploymentRecord{}, fmt.Errorf("decode cluster deployment response: %w", err)
+	}
+	return normalizeClusterDeployment(payload), nil
+}
+
 func (c ProjectClient) CreateMonolithicDeployment(
 	ctx context.Context,
 	token string,
@@ -295,6 +370,86 @@ func (c ProjectClient) CreateMonolithicDeployment(
 		return MonolithicDeploymentRecord{}, fmt.Errorf("decode monolithic deployment response: %w", err)
 	}
 	return normalizeMonolithicDeployment(payload), nil
+}
+
+func (c ProjectClient) DeleteLiveProject(ctx context.Context, token string, project LiveProject) error {
+	switch strings.ToLower(strings.TrimSpace(project.Kind)) {
+	case "database":
+		deploymentIDs := project.DatabaseDeploymentIDs
+		if len(deploymentIDs) == 0 && strings.TrimSpace(project.ID) != "" {
+			deploymentIDs = []string{project.ID}
+		}
+		if len(deploymentIDs) == 0 {
+			return errors.New("database project does not include a deployment id")
+		}
+		for _, deploymentID := range deploymentIDs {
+			endpoint, err := url.JoinPath(c.baseURL, "/api/v1/database-deployments", deploymentID)
+			if err != nil {
+				return err
+			}
+			if err := c.delete(ctx, token, endpoint); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "monolith":
+		endpoint, err := url.JoinPath(c.baseURL, "/api/v1/projects", project.ID)
+		if err != nil {
+			return err
+		}
+		return c.delete(ctx, token, endpoint)
+	case "microservices":
+		endpoint, err := url.JoinPath(c.baseURL, "/api/v1/projects/microservices", project.ID)
+		if err != nil {
+			return err
+		}
+		return c.delete(ctx, token, endpoint)
+	case "dbcluster":
+		namespace := firstNonEmpty(project.Namespace, "default")
+		endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "clusters", project.ID)
+		if err != nil {
+			return err
+		}
+		deleteURL, err := url.Parse(endpoint)
+		if err != nil {
+			return err
+		}
+		query := deleteURL.Query()
+		query.Set("deleteData", "true")
+		deleteURL.RawQuery = query.Encode()
+		return c.delete(ctx, token, deleteURL.String())
+	default:
+		return fmt.Errorf("delete is not available for %s projects", firstNonEmpty(project.Kind, "unknown"))
+	}
+}
+
+func ProjectKindSupportsDelete(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "database", "monolith", "microservices", "dbcluster":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c ProjectClient) delete(ctx context.Context, token, endpoint string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+	return nil
 }
 
 func (c ProjectClient) FetchDatabaseDeployment(ctx context.Context, token, deploymentID string) (DatabaseDeploymentRecord, error) {
@@ -483,6 +638,237 @@ func normalizeDatabaseDeployment(payload map[string]any) DatabaseDeploymentRecor
 		StatusMessage:         readString(payload["statusMessage"]),
 		StatusLog:             readString(payload["statusLog"]),
 	}
+}
+
+func normalizeClusterDeployment(payload map[string]any) ClusterDeploymentRecord {
+	return ClusterDeploymentRecord{
+		ClusterID:         firstNonEmpty(readString(payload["clusterId"]), readString(payload["id"])),
+		ReleaseName:       readString(payload["releaseName"]),
+		Name:              readString(payload["name"]),
+		Namespace:         readString(payload["namespace"]),
+		TargetClusterName: readString(payload["targetClusterName"]),
+		Engine:            readString(payload["engine"]),
+		Status:            readString(payload["status"]),
+		StatusMessage:     readString(payload["statusMessage"]),
+		ServiceHost:       readString(payload["serviceHost"]),
+		ServicePort:       readInt(payload["servicePort"]),
+		TLSEnabled:        readBool(payload["tlsEnabled"]),
+		Command:           readStringSlice(payload["command"]),
+		Stdout:            readString(payload["stdout"]),
+		Stderr:            readString(payload["stderr"]),
+		Successful:        readBool(payload["successful"]),
+		ExitCode:          readInt(payload["exitCode"]),
+		StartedAt:         readTimestamp(payload["startedAt"]),
+		FinishedAt:        readTimestamp(payload["finishedAt"]),
+	}
+}
+
+type clusterResourceProfile struct {
+	storageSize string
+	cpuRequest  string
+	cpuLimit    string
+	memRequest  string
+	memLimit    string
+}
+
+func buildClusterDeploymentPayload(input CreateClusterDeploymentInput, namespace string) map[string]any {
+	engine := normalizeClusterEngine(input.Engine)
+	sizeProfile := normalizeClusterSizeProfile(input.SizeProfile)
+	resource := clusterResource(engine, sizeProfile)
+	storageSize := firstNonEmpty(input.StorageSize, resource.storageSize)
+	projectName := strings.TrimSpace(input.ProjectName)
+	databaseName := firstNonEmpty(input.DatabaseName, defaultClusterDatabase(engine))
+	username := firstNonEmpty(input.Username, defaultClusterUsername(engine))
+	publicHostnames := normalizeClusterHostnames(input.PublicHostnames)
+
+	database := map[string]any{
+		"engine":            strings.ToUpper(engine),
+		"enabled":           true,
+		"instances":         3,
+		"storageSize":       storageSize,
+		"publicHostnames":   publicHostnames,
+		"monitoringEnabled": true,
+		"notes":             "",
+		"resource": map[string]any{
+			"cpuRequest":      resource.cpuRequest,
+			"cpuLimit":        resource.cpuLimit,
+			"memRequest":      resource.memRequest,
+			"memLimit":        resource.memLimit,
+			"resourceProfile": strings.ToUpper(sizeProfile),
+		},
+		"version":      strings.TrimSpace(input.Version),
+		"databaseName": databaseName,
+		"username":     username,
+	}
+	switch engine {
+	case "postgresql":
+		database["postgresql"] = map[string]any{
+			"walEnabled":        false,
+			"bootstrapDatabase": databaseName,
+			"bootstrapOwner":    username,
+		}
+	case "mongodb":
+		database["mongo"] = map[string]any{
+			"replicaSetHorizonsEnabled": len(publicHostnames) >= 3,
+		}
+	case "mysql":
+		database["mysql"] = map[string]any{
+			"haproxySize": 2,
+		}
+	case "redis":
+		database["redis"] = map[string]any{
+			"exporterEnabled":  false,
+			"aclPermissions":   []string{"+@read", "+@write", "+@keyspace", "+@connection"},
+			"followersEnabled": true,
+		}
+	case "cassandra":
+		database["cassandra"] = map[string]any{
+			"clusterName":       projectName,
+			"datacenter":        "dc1",
+			"requireClientAuth": false,
+		}
+	}
+
+	return map[string]any{
+		"releaseName": firstNonEmpty(projectName, "database-cluster"),
+		"namespace":   namespace,
+		"projectName": projectName,
+		"cluster": map[string]any{
+			"name":        projectName,
+			"environment": "DEVELOPMENT",
+			"notes":       "",
+			"platformConfig": map[string]any{
+				"targetClusterName": firstNonEmpty(input.TargetCluster, "k8s-cluster2"),
+			},
+		},
+		"database": database,
+		"secrets": map[string]any{
+			"pgPassword":        secretForEngine(engine, "postgresql", input.Password),
+			"mongoPassword":     secretForEngine(engine, "mongodb", input.Password),
+			"mysqlPassword":     secretForEngine(engine, "mysql", input.Password),
+			"redisPassword":     secretForEngine(engine, "redis", input.Password),
+			"cassandraPassword": secretForEngine(engine, "cassandra", input.Password),
+		},
+	}
+}
+
+func secretForEngine(engine, target, password string) any {
+	if engine != target {
+		return nil
+	}
+	return password
+}
+
+func normalizeClusterEngine(engine string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "mongodb", "mongo":
+		return "mongodb"
+	case "mysql":
+		return "mysql"
+	case "redis":
+		return "redis"
+	case "cassandra":
+		return "cassandra"
+	default:
+		return "postgresql"
+	}
+}
+
+func normalizeClusterSizeProfile(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "medium":
+		return "medium"
+	case "large":
+		return "large"
+	default:
+		return "small"
+	}
+}
+
+func defaultClusterDatabase(engine string) string {
+	switch engine {
+	case "redis":
+		return "0"
+	case "cassandra":
+		return "app_keyspace"
+	default:
+		return "appdb"
+	}
+}
+
+func defaultClusterUsername(engine string) string {
+	switch engine {
+	case "postgresql":
+		return "app_postgres"
+	case "mongodb":
+		return "databaseAdmin"
+	case "mysql":
+		return "appuser"
+	case "redis":
+		return "default"
+	case "cassandra":
+		return "cassandra"
+	default:
+		return "app_user"
+	}
+}
+
+func normalizeClusterHostnames(values []string) []string {
+	const wildcardZone = "cluster-db.autonomous-istad.com"
+	hostnames := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		hostname := strings.ToLower(strings.TrimSpace(value))
+		if hostname == "" {
+			continue
+		}
+		if !strings.Contains(hostname, ".") {
+			hostname += "." + wildcardZone
+		}
+		if seen[hostname] {
+			continue
+		}
+		seen[hostname] = true
+		hostnames = append(hostnames, hostname)
+	}
+	return hostnames
+}
+
+func clusterResource(engine, size string) clusterResourceProfile {
+	profiles := map[string]map[string]clusterResourceProfile{
+		"postgresql": {
+			"small":  {"4Gi", "200m", "500m", "512Mi", "1Gi"},
+			"medium": {"8Gi", "350m", "1000m", "1Gi", "2Gi"},
+			"large":  {"16Gi", "500m", "1500m", "2Gi", "4Gi"},
+		},
+		"mongodb": {
+			"small":  {"4Gi", "200m", "600m", "768Mi", "1536Mi"},
+			"medium": {"8Gi", "350m", "1000m", "1Gi", "2Gi"},
+			"large":  {"16Gi", "500m", "1500m", "2Gi", "4Gi"},
+		},
+		"mysql": {
+			"small":  {"4Gi", "250m", "600m", "768Mi", "1536Mi"},
+			"medium": {"8Gi", "400m", "1200m", "1Gi", "2Gi"},
+			"large":  {"16Gi", "600m", "1500m", "2Gi", "4Gi"},
+		},
+		"redis": {
+			"small":  {"3Gi", "75m", "200m", "128Mi", "512Mi"},
+			"medium": {"5Gi", "150m", "350m", "256Mi", "768Mi"},
+			"large":  {"10Gi", "250m", "500m", "512Mi", "1Gi"},
+		},
+		"cassandra": {
+			"small":  {"4Gi", "300m", "1000m", "768Mi", "2Gi"},
+			"medium": {"8Gi", "500m", "1500m", "2Gi", "4Gi"},
+			"large":  {"16Gi", "750m", "2000m", "3Gi", "6Gi"},
+		},
+	}
+	if bySize, ok := profiles[engine]; ok {
+		if profile, ok := bySize[size]; ok {
+			return profile
+		}
+		return bySize["small"]
+	}
+	return profiles["postgresql"]["small"]
 }
 
 func normalizeMonolithicDeployment(payload map[string]any) MonolithicDeploymentRecord {

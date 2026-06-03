@@ -29,7 +29,7 @@ func (m model) renderDashboardProjects(width, height int) []string {
 	counts := projectfeature.KindCounts(m.projects)
 	lines = append(lines, dashboardHeader(
 		"Project workspace",
-		"Real database deployments, monolith apps, and microservice workspaces in your workspace.",
+		"Move with arrows or j/k. Enter opens the selected project. Esc leaves workspace.",
 		width,
 	)...)
 	lines = append(lines, metricLine(width, []string{
@@ -62,11 +62,64 @@ func (m model) renderDashboardProjectDetail(width, height int) []string {
 	if !ok {
 		return m.renderDashboardProjects(width, height)
 	}
+	if m.deleteConfirmOpen {
+		return m.renderProjectDeleteConfirmation(width, height)
+	}
 	lines := make([]string, 0, height)
-	lines = append(lines, dashboardHeader("Overview", "Press esc or b to go back to Projects.", width)...)
-	lines = append(lines, projectOverviewCard(project, width)...)
+	lines = append(lines, dashboardHeader("Overview", "Review details, press enter on Delete, or esc/b to go back.", width)...)
+	lines = append(lines, projectOverviewCard(project, width, m.projectDetailButton)...)
 	lines = append(lines, mainLine("", width))
 	lines = append(lines, projectDetailColumns(project, width)...)
+	return fillStyled(lines, bgDark, width, height)
+}
+
+func (m model) renderProjectDeleteConfirmation(width, height int) []string {
+	project := m.deleteProject
+	if strings.TrimSpace(project.ID) == "" {
+		project, _ = m.selectedProject()
+	}
+	projectName := firstNonEmpty(project.Name, project.ProjectName, "project")
+	cardWidth := min(max(width-8, 42), 86)
+	card := styleCard.Width(cardWidth)
+	title := mainTitleStyle(colorBgCard)
+	body := mainBodyStyle(colorBgCard)
+	muted := mainMutedStyle(colorBgCard)
+	danger := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgCard)).
+		Foreground(lipgloss.Color("#ff8787")).
+		Bold(true)
+	input := m.deleteConfirmText
+	emptyInput := input == ""
+	inputStyle := body
+	if emptyInput {
+		input = "type project name"
+		inputStyle = muted
+	}
+	inputBox := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgCard)).
+		Foreground(lipgloss.Color(colorText)).
+		Width(max(cardWidth-6, 24)).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colorPrimary)).
+		BorderBackground(lipgloss.Color(colorBgCard)).
+		Render(inputStyle.Render(truncatePlain(input, max(cardWidth-10, 16))))
+
+	lines := make([]string, 0, height)
+	lines = append(lines, dashboardHeader("Delete project", "Type the project name exactly, then press enter.", width)...)
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, cardContentLine(card, "  "+danger.Render(truncatePlain("Delete "+projectName, cardWidth-4)), width))
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, cardContentLine(card, "  "+body.Render(truncatePlain(projectDeleteWarning(project), cardWidth-4)), width))
+	lines = append(lines, cardContentLine(card, "  "+muted.Render("Required text: ")+title.Render(truncatePlain(projectName, max(cardWidth-22, 8))), width))
+	lines = append(lines, cardContentLine(card, "", width))
+	for _, line := range strings.Split(inputBox, "\n") {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, projectDeleteDialogActions(card, width, m.deleteConfirmButton)...)
+	lines = append(lines, cardContentLine(card, "  "+muted.Render("tab/arrows select  enter confirm  esc cancel"), width))
+	lines = append(lines, cardContentLine(card, "", width))
 	return fillStyled(lines, bgDark, width, height)
 }
 
@@ -91,7 +144,7 @@ func emptyProjectCard(width int) []string {
 	return lines
 }
 
-func projectOverviewCard(project api.LiveProject, width int) []string {
+func projectOverviewCard(project api.LiveProject, width, selectedAction int) []string {
 	cardWidth := max(width-6, 42)
 	card := styleCard.Width(cardWidth)
 	title := mainTitleStyle(colorBgCard)
@@ -124,9 +177,75 @@ func projectOverviewCard(project api.LiveProject, width int) []string {
 		lines = append(lines, projectInfoPill(card, cardWidth, width, item.label, item.value)...)
 	}
 	lines = append(lines, cardContentLine(card, "", width))
-	lines = append(lines, cardContentLine(card, body.Render("  ")+body.Render("Use the connection profile to connect from your database client."), width))
+	lines = append(lines, cardContentLine(card, "  "+muted.Render(truncatePlain(projectDetailHint(project), cardWidth-4)), width))
+	if api.ProjectKindSupportsDelete(project.Kind) {
+		lines = append(lines, cardContentLine(card, "", width))
+		lines = append(lines, projectDetailActions(card, width, selectedAction)...)
+	}
 	lines = append(lines, cardContentLine(card, "", width))
 	return lines
+}
+
+func projectDetailHint(project api.LiveProject) string {
+	switch strings.ToLower(strings.TrimSpace(project.Kind)) {
+	case "database", "dbcluster":
+		return "Connection details appear below when the backend provides them."
+	case "monolith", "microservices":
+		return "Deployment metadata appears below when the backend provides it."
+	default:
+		return "Project metadata appears below when the backend provides it."
+	}
+}
+
+func projectDeleteWarning(project api.LiveProject) string {
+	switch strings.ToLower(strings.TrimSpace(project.Kind)) {
+	case "database":
+		return "This deletes linked database deployments and starts backend cleanup."
+	case "dbcluster":
+		return "This deletes the database cluster with data cleanup enabled."
+	case "monolith", "microservices":
+		return "This removes the deployed application project from A8S."
+	default:
+		return "This removes the deployed project from A8S."
+	}
+}
+
+func projectDetailActions(card lipgloss.Style, width, selected int) []string {
+	deleteButton := projectDialogButton("Delete", selected == 0, true)
+	cancelButton := projectDialogButton("Cancel", selected == 1, false)
+	return []string{cardContentLine(card, "  "+deleteButton+mainBodyStyle(colorBgCard).Render("  ")+cancelButton, width)}
+}
+
+func projectDeleteDialogActions(card lipgloss.Style, width, selected int) []string {
+	deleteButton := projectDialogButton("Delete", selected == 0, true)
+	cancelButton := projectDialogButton("Cancel", selected == 1, false)
+	return []string{cardContentLine(card, "  "+deleteButton+mainBodyStyle(colorBgCard).Render("  ")+cancelButton, width)}
+}
+
+func projectDialogButton(label string, selected, danger bool) string {
+	bg := colorBgPill
+	fg := colorText
+	if danger {
+		bg = "#3a2424"
+		fg = "#ff8787"
+	}
+	if selected {
+		if danger {
+			bg = "#5a2b2b"
+		} else {
+			bg = colorPrimary
+			fg = colorTitle
+		}
+		label = "> " + label
+	} else {
+		label = "  " + label
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Foreground(lipgloss.Color(fg)).
+		Bold(selected || danger).
+		Padding(0, 2).
+		Render(label)
 }
 
 func projectInfoPill(card lipgloss.Style, cardWidth, width int, label, value string) []string {
