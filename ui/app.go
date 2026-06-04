@@ -50,42 +50,62 @@ const (
 )
 
 type model struct {
-	config              config.AppConfig
-	configErr           error
-	auth                auth.AuthClient
-	projectsAPI         api.ProjectClient
-	spinner             spinner.Model
-	tokens              auth.TokenSet
-	state               appState
-	width               int
-	height              int
-	cursor              int
-	launcherCursor      int
-	navCursor           int
-	deployCursor        int
-	page                appPage
-	focus               focusArea
-	filter              string
-	filtering           bool
-	projects            []api.LiveProject
-	projectDetailOpen   bool
-	projectDetailButton int
-	deleteConfirmOpen   bool
-	deleteProject       api.LiveProject
-	deleteConfirmText   string
-	deleteConfirmButton int
-	dbForm              databaseDeployForm
-	dbFormOpen          bool
-	monolithForm        monolithicDeployForm
-	monolithFormOpen    bool
-	deployLogOpen       bool
-	deployLog           api.DatabaseDeploymentRecord
-	deployLogOffset     int
-	themeIndex          int
-	logoutSucceeded     bool
-	message             string
-	lastRefreshed       time.Time
-	userName            string
+	config               config.AppConfig
+	configErr            error
+	auth                 auth.AuthClient
+	projectsAPI          api.ProjectClient
+	scannerAPI           api.ImageScannerClient
+	observabilityAPI     api.ObservabilityClient
+	spinner              spinner.Model
+	tokens               auth.TokenSet
+	state                appState
+	width                int
+	height               int
+	cursor               int
+	launcherCursor       int
+	navCursor            int
+	deployCursor         int
+	page                 appPage
+	focus                focusArea
+	filter               string
+	filtering            bool
+	projects             []api.LiveProject
+	projectDetailOpen    bool
+	projectDetailButton  int
+	deleteConfirmOpen    bool
+	deleteProject        api.LiveProject
+	deleteConfirmText    string
+	deleteConfirmButton  int
+	dbForm               databaseDeployForm
+	dbFormOpen           bool
+	monolithForm         monolithicDeployForm
+	monolithFormOpen     bool
+	deployLogOpen        bool
+	deployLog            api.DatabaseDeploymentRecord
+	deployLogOffset      int
+	scannerImages        []api.ImageScannerImage
+	scannerScans         []api.ImageScanJob
+	scannerCursor        int
+	scannerHistoryCursor int
+	scannerActiveScan    api.ImageScanJob
+	scannerReport        string
+	scannerReportScanID  string
+	scannerReportLoading bool
+	scannerLoading       bool
+	scannerMode          int
+	monitoringOverview   api.MonitoringOverview
+	monitoringLoading    bool
+	monitoringCursor     int
+	logsNamespace        string
+	logsPods             []api.PodSummary
+	logsLines            []api.LogLine
+	logsCursor           int
+	logsLoading          bool
+	themeIndex           int
+	logoutSucceeded      bool
+	message              string
+	lastRefreshed        time.Time
+	userName             string
 }
 
 type loginResultMsg struct {
@@ -128,6 +148,52 @@ type monolithicDeployResultMsg struct {
 	err        error
 }
 
+type microserviceDeployResultMsg struct {
+	tokens     auth.TokenSet
+	deployment api.MonolithicDeploymentRecord
+	err        error
+}
+
+type imageScannerLoadMsg struct {
+	tokens auth.TokenSet
+	images []api.ImageScannerImage
+	scans  []api.ImageScanJob
+	err    error
+}
+
+type imageScanStartMsg struct {
+	tokens auth.TokenSet
+	scan   api.ImageScanJob
+	err    error
+}
+
+type imageScanPollMsg struct {
+	tokens auth.TokenSet
+	scan   api.ImageScanJob
+	err    error
+}
+
+type imageScanReportMsg struct {
+	tokens auth.TokenSet
+	scanID string
+	report string
+	err    error
+}
+
+type monitoringLoadMsg struct {
+	tokens   auth.TokenSet
+	overview api.MonitoringOverview
+	err      error
+}
+
+type logsLoadMsg struct {
+	tokens    auth.TokenSet
+	namespace string
+	pods      []api.PodSummary
+	lines     []api.LogLine
+	err       error
+}
+
 type projectDeleteResultMsg struct {
 	tokens  auth.TokenSet
 	project api.LiveProject
@@ -148,12 +214,15 @@ type databaseDeployForm struct {
 
 type monolithicDeployForm struct {
 	focus        int
+	mode         string
 	projectName  string
+	serviceName  string
 	repoURL      string
 	repoFullName string
 	branch       string
 	appPort      string
 	framework    string
+	serviceType  string
 	directory    string
 }
 
@@ -165,10 +234,12 @@ func initialModel(config config.AppConfig, configErr error) model {
 		message = configErr.Error()
 	}
 	return model{
-		config:      config,
-		configErr:   configErr,
-		auth:        auth.NewAuthClient(config),
-		projectsAPI: api.NewProjectClient(config.BackendBaseURL),
+		config:           config,
+		configErr:        configErr,
+		auth:             auth.NewAuthClient(config),
+		projectsAPI:      api.NewProjectClient(config.BackendBaseURL),
+		scannerAPI:       api.NewImageScannerClient(config.BackendBaseURL),
+		observabilityAPI: api.NewObservabilityClient(config.BackendBaseURL),
 		spinner: spinner.New(
 			spinner.WithSpinner(spinner.MiniDot),
 			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#f56618"))),
@@ -332,6 +403,123 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Monolithic deployment queued: " + name
 		}
 		return m, m.fetchProjectsCmd()
+	case microserviceDeployResultMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.state = stateReady
+			m.monolithFormOpen = true
+			m.message = "Microservices deployment failed: " + msg.err.Error()
+			return m, nil
+		}
+		name := firstNonEmpty(msg.deployment.Name, m.monolithForm.projectName, "microservices")
+		m.monolithFormOpen = false
+		m.monolithForm = newMonolithicDeployForm()
+		m.state = stateLoading
+		if msg.deployment.QueueItemID > 0 {
+			m.message = fmt.Sprintf("Microservices deployment queued: %s (#%d)", name, msg.deployment.QueueItemID)
+		} else {
+			m.message = "Microservices deployment queued: " + name
+		}
+		return m, m.fetchProjectsCmd()
+	case imageScannerLoadMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.scannerLoading = false
+		if msg.err != nil {
+			m.message = "Image scanner failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.scannerImages = msg.images
+		m.scannerScans = msg.scans
+		m.scannerCursor = clamp(m.scannerCursor, 0, max(len(m.scannerImages)-1, 0))
+		m.scannerHistoryCursor = clamp(m.scannerHistoryCursor, 0, max(len(m.scannerScans)-1, 0))
+		m.message = fmt.Sprintf("Loaded %d images and %d scans", len(m.scannerImages), len(m.scannerScans))
+	case imageScanStartMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.scannerLoading = false
+		if msg.err != nil {
+			m.message = "Image scan failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.scannerActiveScan = msg.scan
+		m.scannerReport = ""
+		m.scannerReportScanID = ""
+		m.scannerReportLoading = false
+		m.scannerMode = 0
+		m.message = imageScanStatusMessage(msg.scan)
+		if api.ImageScanTerminal(msg.scan.Status) {
+			if !api.ImageScanFailed(msg.scan.Status) && msg.scan.ID != "" {
+				m.scannerReportLoading = true
+				return m, tea.Batch(m.loadImageScannerCmd(), m.loadImageScanReportCmd(msg.scan.ID))
+			}
+			return m, m.loadImageScannerCmd()
+		}
+		return m, m.pollImageScanCmd(msg.scan.ID, 2*time.Second)
+	case imageScanPollMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.scannerLoading = false
+			m.message = "Image scan refresh failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.scannerActiveScan = msg.scan
+		m.message = imageScanStatusMessage(msg.scan)
+		if api.ImageScanTerminal(msg.scan.Status) {
+			m.scannerLoading = false
+			if !api.ImageScanFailed(msg.scan.Status) && msg.scan.ID != "" {
+				m.scannerReportLoading = true
+				return m, tea.Batch(m.loadImageScannerCmd(), m.loadImageScanReportCmd(msg.scan.ID))
+			}
+			return m, m.loadImageScannerCmd()
+		}
+		return m, m.pollImageScanCmd(msg.scan.ID, 2*time.Second)
+	case imageScanReportMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.scannerReportLoading = false
+		if msg.err != nil {
+			m.message = "Scan report unavailable: " + msg.err.Error()
+			return m, nil
+		}
+		m.scannerReportScanID = msg.scanID
+		m.scannerReport = msg.report
+		m.message = "Scan report loaded"
+	case monitoringLoadMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.monitoringLoading = false
+		if msg.err != nil {
+			m.message = "Monitoring failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.monitoringOverview = msg.overview
+		m.monitoringCursor = clamp(m.monitoringCursor, 0, max(len(m.monitoringOverview.Projects)-1, 0))
+		m.lastRefreshed = time.Now()
+		m.message = fmt.Sprintf("Monitoring loaded for %s", firstNonEmpty(msg.overview.Namespace, "workspace"))
+	case logsLoadMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.logsLoading = false
+		if msg.err != nil {
+			m.message = "Logs failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.logsNamespace = msg.namespace
+		m.logsPods = msg.pods
+		m.logsLines = msg.lines
+		m.logsCursor = clamp(m.logsCursor, 0, max(len(m.logsPods)-1, 0))
+		m.lastRefreshed = time.Now()
+		m.message = fmt.Sprintf("Loaded %d pods and %d log lines", len(m.logsPods), len(m.logsLines))
 	case projectDeleteResultMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -421,6 +609,12 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateReady && isEnter && m.page == pageDeployment {
 			return m.activateDeploymentFeature()
 		}
+		if m.state == stateReady && isEnter && m.page == pageImageScanner {
+			return m.activateImageScannerSelection()
+		}
+		if m.state == stateReady && isEnter && m.page == pageLogs {
+			return m.activateLogsSelection()
+		}
 		if m.state != stateReady && isEnter {
 			return m.activateLauncherItem()
 		}
@@ -451,6 +645,21 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case key == "r":
 		if m.tokens.AccessToken != "" {
+			if m.page == pageImageScanner {
+				m.scannerLoading = true
+				m.message = "Refreshing image scanner..."
+				return m, m.loadImageScannerCmd()
+			}
+			if m.page == pageLogs {
+				m.logsLoading = true
+				m.message = "Refreshing logs..."
+				return m, m.loadLogsCmd()
+			}
+			if m.page == pageMonitoring {
+				m.monitoringLoading = true
+				m.message = "Refreshing monitoring..."
+				return m, m.loadMonitoringCmd()
+			}
 			m.state = stateLoading
 			m.message = "Refreshing live projects..."
 			return m, m.fetchProjectsCmd()
@@ -488,6 +697,12 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.moveNavigationCursor(-1)
 		} else if m.state == stateReady && m.page == pageDeployment {
 			m.moveDeploymentCursor(-1)
+		} else if m.state == stateReady && m.page == pageImageScanner {
+			m.moveImageScannerCursor(-1)
+		} else if m.state == stateReady && m.page == pageLogs {
+			m.moveLogsCursor(-1)
+		} else if m.state == stateReady && m.page == pageMonitoring {
+			m.moveMonitoringCursor(-1)
 		} else if m.state == stateReady && m.page == pageProjects {
 			m.moveCursor(-1)
 		} else if m.state == stateLoading {
@@ -500,6 +715,12 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.moveNavigationCursor(1)
 		} else if m.state == stateReady && m.page == pageDeployment {
 			m.moveDeploymentCursor(1)
+		} else if m.state == stateReady && m.page == pageImageScanner {
+			m.moveImageScannerCursor(1)
+		} else if m.state == stateReady && m.page == pageLogs {
+			m.moveLogsCursor(1)
+		} else if m.state == stateReady && m.page == pageMonitoring {
+			m.moveMonitoringCursor(1)
 		} else if m.state == stateReady && m.page == pageProjects {
 			m.moveCursor(1)
 		} else if m.state == stateLoading {
@@ -514,6 +735,10 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.message = "Press enter to open " + item.label
 				return m, nil
 			}
+			if m.page == pageImageScanner {
+				m.moveImageScannerMode(-1)
+				return m, nil
+			}
 			m.message = "Use esc to leave this workspace"
 		}
 	case key == "right" || code == tea.KeyRight:
@@ -521,6 +746,10 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.focus == focusSidebar {
 				item := m.selectedNavigationItem()
 				m.message = "Press enter to open " + item.label
+				return m, nil
+			}
+			if m.page == pageImageScanner {
+				m.moveImageScannerMode(1)
 				return m, nil
 			}
 			m.message = "Use esc to leave this workspace"
@@ -562,12 +791,23 @@ func newDatabaseDeployForm() databaseDeployForm {
 }
 
 func newMonolithicDeployForm() monolithicDeployForm {
+	return newProjectDeployForm("monolithic")
+}
+
+func newMicroservicesDeployForm() monolithicDeployForm {
+	return newProjectDeployForm("microservices")
+}
+
+func newProjectDeployForm(mode string) monolithicDeployForm {
 	local := deploy.DetectLocalProject()
 	return monolithicDeployForm{
+		mode:        mode,
 		projectName: local.Name,
+		serviceName: local.Name,
 		branch:      local.Branch,
 		appPort:     fmt.Sprintf("%d", local.AppPort),
 		framework:   local.Framework,
+		serviceType: "backend",
 		directory:   local.Directory,
 	}
 }
@@ -615,14 +855,15 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 	key := msg.String()
 	code := msg.Key().Code
 	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
-	fieldCount := 5
+	fieldCount := m.monolithForm.fieldCount()
+	submitIndex := fieldCount - 1
 
 	switch {
 	case key == "ctrl+c":
 		return m, tea.Quit
 	case key == "esc" || code == tea.KeyEscape:
 		m.monolithFormOpen = false
-		m.message = "Monolithic deployment canceled"
+		m.message = m.monolithForm.title() + " deployment canceled"
 	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown || key == "j":
 		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
 	case code == tea.KeyUp || key == "k":
@@ -630,7 +871,10 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
 		m.deleteMonolithicFormRune()
 	case isEnter:
-		if m.monolithForm.focus == fieldCount-1 {
+		if m.monolithForm.focus == submitIndex {
+			if m.monolithForm.isMicroservices() {
+				return m.submitMicroserviceDeployment()
+			}
 			return m.submitMonolithicDeployment()
 		}
 		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
@@ -691,6 +935,18 @@ func (m *model) appendMonolithicFormText(text string) {
 		m.monolithForm.branch += text
 	case 3:
 		m.monolithForm.appPort += text
+	case 4:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.serviceName += text
+		}
+	case 5:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.framework += text
+		}
+	case 6:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.serviceType += text
+		}
 	}
 }
 
@@ -705,6 +961,18 @@ func (m *model) deleteMonolithicFormRune() {
 		m.monolithForm.branch = trimLastRune(m.monolithForm.branch)
 	case 3:
 		m.monolithForm.appPort = trimLastRune(m.monolithForm.appPort)
+	case 4:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.serviceName = trimLastRune(m.monolithForm.serviceName)
+		}
+	case 5:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.framework = trimLastRune(m.monolithForm.framework)
+		}
+	case 6:
+		if m.monolithForm.isMicroservices() {
+			m.monolithForm.serviceType = trimLastRune(m.monolithForm.serviceType)
+		}
 	}
 }
 
@@ -845,6 +1113,38 @@ func (m model) submitMonolithicDeployment() (tea.Model, tea.Cmd) {
 			deployment, err = projectsAPI.CreateMonolithicDeployment(ctx, tokens.AccessToken, input)
 		}
 		return monolithicDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
+	}
+}
+
+func (m model) submitMicroserviceDeployment() (tea.Model, tea.Cmd) {
+	input, err := m.monolithForm.microserviceInput()
+	if err != nil {
+		m.message = err.Error()
+		return m, nil
+	}
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	m.message = "Submitting microservices deployment..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return microserviceDeployResultMsg{tokens: tokens, err: err}
+			}
+		}
+		deployment, err := projectsAPI.CreateMicroserviceDeployment(ctx, tokens.AccessToken, input)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return microserviceDeployResultMsg{tokens: tokens, err: err}
+			}
+			deployment, err = projectsAPI.CreateMicroserviceDeployment(ctx, tokens.AccessToken, input)
+		}
+		return microserviceDeployResultMsg{tokens: tokens, deployment: deployment, err: err}
 	}
 }
 
@@ -1074,6 +1374,69 @@ func (f monolithicDeployForm) input() (api.CreateMonolithicDeploymentInput, erro
 	}, nil
 }
 
+func (f monolithicDeployForm) microserviceInput() (api.CreateMicroserviceDeploymentInput, error) {
+	projectName := strings.TrimSpace(f.projectName)
+	serviceName := strings.TrimSpace(f.serviceName)
+	repoURL := strings.TrimSpace(f.repoURL)
+	branch := strings.TrimSpace(f.branch)
+	repoFullName := strings.TrimSpace(f.repoFullName)
+	if projectName == "" {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Project name is required")
+	}
+	if serviceName == "" {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Service name is required")
+	}
+	if repoURL == "" {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Git remote URL is required")
+	}
+	if repoFullName == "" {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Git remote must include owner and repository")
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	serviceType := strings.ToLower(strings.TrimSpace(f.serviceType))
+	if serviceType == "" {
+		serviceType = "backend"
+	}
+	framework := strings.TrimSpace(f.framework)
+	exposePublic := serviceType == "gateway" || serviceType == "frontend" || strings.EqualFold(framework, "Next.js") || strings.EqualFold(framework, "nextjs")
+	return api.CreateMicroserviceDeploymentInput{
+		ProjectName: projectName,
+		Branch:      branch,
+		Services: []api.CreateMicroserviceServiceInput{{
+			Name:          serviceName,
+			RepoURL:       repoURL,
+			RepoFullName:  repoFullName,
+			RepoProvider:  "github",
+			Branch:        branch,
+			AppPort:       deploy.ParsePositiveInt(f.appPort, 3000),
+			ServiceType:   serviceType,
+			Framework:     framework,
+			ExposePublic:  exposePublic,
+			PrimaryPublic: exposePublic,
+		}},
+	}, nil
+}
+
+func (f monolithicDeployForm) isMicroservices() bool {
+	return f.mode == "microservices"
+}
+
+func (f monolithicDeployForm) title() string {
+	if f.isMicroservices() {
+		return "Microservices"
+	}
+	return "Monolithic"
+}
+
+func (f monolithicDeployForm) fieldCount() int {
+	if f.isMicroservices() {
+		return 8
+	}
+	return 5
+}
+
 func (m model) startLoginIfAvailable() (tea.Model, tea.Cmd) {
 	if m.state == stateLoggedOut || m.state == stateError {
 		m.state = stateLoggingIn
@@ -1108,6 +1471,21 @@ func (m model) activateNavigationItem() (tea.Model, tea.Cmd) {
 	}
 	item := items[clamp(m.navCursor, 0, len(items)-1)]
 	m.setPage(item.page)
+	if item.page == pageImageScanner {
+		m.scannerLoading = true
+		m.message = "Loading image scanner..."
+		return m, m.loadImageScannerCmd()
+	}
+	if item.page == pageLogs {
+		m.logsLoading = true
+		m.message = "Loading workspace logs..."
+		return m, m.loadLogsCmd()
+	}
+	if item.page == pageMonitoring {
+		m.monitoringLoading = true
+		m.message = "Loading monitoring overview..."
+		return m, m.loadMonitoringCmd()
+	}
 	return m, nil
 }
 
@@ -1133,8 +1511,65 @@ func (m model) activateDeploymentFeature() (tea.Model, tea.Cmd) {
 	if feature.Label == "Monolithic" {
 		return m.openMonolithicDeployForm(), nil
 	}
+	if feature.Label == "Microservices" {
+		return m.openMicroservicesDeployForm(), nil
+	}
 	m.message = feature.Label + " deployment is coming soon"
 	return m, nil
+}
+
+func (m model) activateImageScannerSelection() (tea.Model, tea.Cmd) {
+	if m.scannerLoading {
+		m.message = "Image scanner is still loading"
+		return m, nil
+	}
+	switch m.scannerMode {
+	case 1:
+		scan, ok := m.selectedScannerHistory()
+		if !ok {
+			m.message = "No scan history selected"
+			return m, nil
+		}
+		m.scannerActiveScan = scan
+		m.scannerMode = 1
+		m.message = "Opened scan " + firstNonEmpty(scan.ImageName, scan.ID)
+		m.scannerReport = ""
+		m.scannerReportScanID = ""
+		if api.ImageScanTerminal(scan.Status) && !api.ImageScanFailed(scan.Status) && scan.ID != "" {
+			m.scannerReportLoading = true
+			m.message = "Loading scan report..."
+			return m, m.loadImageScanReportCmd(scan.ID)
+		}
+		return m, nil
+	default:
+		image, ok := m.selectedScannerImage()
+		if !ok {
+			m.message = "No deployed image selected"
+			return m, nil
+		}
+		m.scannerLoading = true
+		m.scannerReport = ""
+		m.scannerReportScanID = ""
+		m.scannerReportLoading = false
+		m.scannerMode = 0
+		m.message = "Starting image scan for " + imageScannerImageLabel(image)
+		return m, m.startImageScanCmd(image)
+	}
+}
+
+func (m model) activateLogsSelection() (tea.Model, tea.Cmd) {
+	if m.logsLoading {
+		m.message = "Logs are still loading"
+		return m, nil
+	}
+	pod, ok := m.selectedLogPod()
+	if !ok {
+		m.message = "No pod selected"
+		return m, nil
+	}
+	m.logsLoading = true
+	m.message = "Loading logs for " + pod.Name
+	return m, m.loadLogsCmd()
 }
 
 func (m model) openProjectDetail() (tea.Model, tea.Cmd) {
@@ -1194,6 +1629,15 @@ func (m model) openMonolithicDeployForm() model {
 	return m
 }
 
+func (m model) openMicroservicesDeployForm() model {
+	m.navCursor = m.navigationIndexByPage(pageDeployment)
+	m.dbFormOpen = false
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+	m.message = "Deploy one microservice now. Add more services later from the project workspace."
+	return m
+}
+
 func (m *model) setPage(page appPage) {
 	m.page = page
 	m.projectDetailOpen = false
@@ -1238,6 +1682,24 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.deployLogOpen = false
 	m.deployLog = api.DatabaseDeploymentRecord{}
 	m.deployLogOffset = 0
+	m.scannerImages = nil
+	m.scannerScans = nil
+	m.scannerCursor = 0
+	m.scannerHistoryCursor = 0
+	m.scannerActiveScan = api.ImageScanJob{}
+	m.scannerReport = ""
+	m.scannerReportScanID = ""
+	m.scannerReportLoading = false
+	m.scannerLoading = false
+	m.scannerMode = 0
+	m.monitoringOverview = api.MonitoringOverview{}
+	m.monitoringLoading = false
+	m.monitoringCursor = 0
+	m.logsNamespace = ""
+	m.logsPods = nil
+	m.logsLines = nil
+	m.logsCursor = 0
+	m.logsLoading = false
 	m.dbForm = newDatabaseDeployForm()
 	m.monolithForm = newMonolithicDeployForm()
 	m.cursor = 0
@@ -1347,11 +1809,102 @@ func (m *model) moveDeploymentCursor(delta int) {
 	m.deployCursor = clamp(m.deployCursor+delta, 0, max(len(deploy.Features)-1, 0))
 }
 
+func (m *model) moveImageScannerCursor(delta int) {
+	switch m.scannerMode {
+	case 1:
+		m.scannerHistoryCursor = clamp(m.scannerHistoryCursor+delta, 0, max(len(m.scannerScans)-1, 0))
+	default:
+		m.scannerCursor = clamp(m.scannerCursor+delta, 0, max(len(m.scannerImages)-1, 0))
+	}
+}
+
+func (m *model) moveImageScannerMode(delta int) {
+	m.scannerMode = wrapIndex(m.scannerMode+delta, 2)
+	switch m.scannerMode {
+	case 0:
+		m.message = "Scan images selected"
+	case 1:
+		m.message = "Scan history selected"
+	}
+}
+
+func (m *model) moveLogsCursor(delta int) {
+	m.logsCursor = clamp(m.logsCursor+delta, 0, max(len(m.logsPods)-1, 0))
+}
+
+func (m *model) moveMonitoringCursor(delta int) {
+	m.monitoringCursor = clamp(m.monitoringCursor+delta, 0, max(len(m.monitoringOverview.Projects)-1, 0))
+}
+
 func (m model) selectedDeploymentFeature() deploy.Feature {
 	if len(deploy.Features) == 0 {
 		return deploy.Feature{}
 	}
 	return deploy.Features[clamp(m.deployCursor, 0, len(deploy.Features)-1)]
+}
+
+func (m model) selectedScannerImage() (api.ImageScannerImage, bool) {
+	if len(m.scannerImages) == 0 {
+		return api.ImageScannerImage{}, false
+	}
+	return m.scannerImages[clamp(m.scannerCursor, 0, len(m.scannerImages)-1)], true
+}
+
+func (m model) selectedScannerHistory() (api.ImageScanJob, bool) {
+	if len(m.scannerScans) == 0 {
+		return api.ImageScanJob{}, false
+	}
+	return m.scannerScans[clamp(m.scannerHistoryCursor, 0, len(m.scannerScans)-1)], true
+}
+
+func (m model) selectedLogPod() (api.PodSummary, bool) {
+	if len(m.logsPods) == 0 {
+		return api.PodSummary{}, false
+	}
+	return m.logsPods[clamp(m.logsCursor, 0, len(m.logsPods)-1)], true
+}
+
+func (m model) selectedMonitoringProject() (api.MonitoringProjectMetrics, bool) {
+	if len(m.monitoringOverview.Projects) == 0 {
+		return api.MonitoringProjectMetrics{}, false
+	}
+	return m.monitoringOverview.Projects[clamp(m.monitoringCursor, 0, len(m.monitoringOverview.Projects)-1)], true
+}
+
+func (m model) resolvedLogsNamespace() string {
+	if strings.TrimSpace(m.logsNamespace) != "" {
+		return strings.TrimSpace(m.logsNamespace)
+	}
+	if strings.TrimSpace(m.monitoringOverview.Namespace) != "" {
+		return strings.TrimSpace(m.monitoringOverview.Namespace)
+	}
+	for _, project := range m.projects {
+		if strings.TrimSpace(project.Namespace) != "" {
+			return strings.TrimSpace(project.Namespace)
+		}
+	}
+	return ""
+}
+
+func podExists(pods []api.PodSummary, name string) bool {
+	for _, pod := range pods {
+		if pod.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func firstRunningPodName(pods []api.PodSummary) string {
+	for _, pod := range pods {
+		if strings.EqualFold(pod.Phase, "running") {
+			return pod.Name
+		}
+	}
+	if len(pods) == 0 {
+		return ""
+	}
+	return pods[0].Name
 }
 
 func (m model) focusAreaCount() int {
@@ -1363,6 +1916,230 @@ func (m model) loginCmd() tea.Cmd {
 	return func() tea.Msg {
 		tokens, err := authClient.Login(context.Background())
 		return loginResultMsg{tokens: tokens, err: err}
+	}
+}
+
+func (m model) loadImageScannerCmd() tea.Cmd {
+	scannerAPI := m.scannerAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScannerLoadMsg{tokens: tokens, err: err}
+			}
+		}
+
+		images, err := scannerAPI.ListImages(ctx, tokens.AccessToken)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScannerLoadMsg{tokens: tokens, err: err}
+			}
+			images, err = scannerAPI.ListImages(ctx, tokens.AccessToken)
+		}
+		if err != nil {
+			return imageScannerLoadMsg{tokens: tokens, err: err}
+		}
+		scans, err := scannerAPI.ListScans(ctx, tokens.AccessToken)
+		return imageScannerLoadMsg{tokens: tokens, images: images, scans: scans, err: err}
+	}
+}
+
+func (m model) startImageScanCmd(image api.ImageScannerImage) tea.Cmd {
+	scannerAPI := m.scannerAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanStartMsg{tokens: tokens, err: err}
+			}
+		}
+		scan, err := scannerAPI.CreateScan(ctx, tokens.AccessToken, api.CreateImageScanInput{
+			SourceKind:  "harbor",
+			ImageID:     image.ID,
+			ForceRescan: true,
+		})
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanStartMsg{tokens: tokens, err: err}
+			}
+			scan, err = scannerAPI.CreateScan(ctx, tokens.AccessToken, api.CreateImageScanInput{
+				SourceKind:  "harbor",
+				ImageID:     image.ID,
+				ForceRescan: true,
+			})
+		}
+		return imageScanStartMsg{tokens: tokens, scan: scan, err: err}
+	}
+}
+
+func (m model) pollImageScanCmd(scanID string, delay time.Duration) tea.Cmd {
+	scannerAPI := m.scannerAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanPollMsg{tokens: tokens, err: err}
+			}
+		}
+		scan, err := scannerAPI.GetScan(ctx, tokens.AccessToken, scanID)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanPollMsg{tokens: tokens, err: err}
+			}
+			scan, err = scannerAPI.GetScan(ctx, tokens.AccessToken, scanID)
+		}
+		return imageScanPollMsg{tokens: tokens, scan: scan, err: err}
+	}
+}
+
+func (m model) loadImageScanReportCmd(scanID string) tea.Cmd {
+	scannerAPI := m.scannerAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanReportMsg{tokens: tokens, scanID: scanID, err: err}
+			}
+		}
+		report, err := scannerAPI.GetScanReport(ctx, tokens.AccessToken, scanID)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return imageScanReportMsg{tokens: tokens, scanID: scanID, err: err}
+			}
+			report, err = scannerAPI.GetScanReport(ctx, tokens.AccessToken, scanID)
+		}
+		return imageScanReportMsg{tokens: tokens, scanID: scanID, report: report, err: err}
+	}
+}
+
+func (m model) loadMonitoringCmd() tea.Cmd {
+	observabilityAPI := m.observabilityAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return monitoringLoadMsg{tokens: tokens, err: err}
+			}
+		}
+		overview, err := observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return monitoringLoadMsg{tokens: tokens, err: err}
+			}
+			overview, err = observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+		}
+		return monitoringLoadMsg{tokens: tokens, overview: overview, err: err}
+	}
+}
+
+func (m model) loadLogsCmd() tea.Cmd {
+	observabilityAPI := m.observabilityAPI
+	authClient := m.auth
+	tokens := m.tokens
+	namespace := m.resolvedLogsNamespace()
+	selectedPodName := ""
+	if pod, ok := m.selectedLogPod(); ok {
+		selectedPodName = pod.Name
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return logsLoadMsg{tokens: tokens, namespace: namespace, err: err}
+			}
+		}
+		if namespace == "" {
+			overview, overviewErr := observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+			if api.IsUnauthorized(overviewErr) && tokens.CanRefresh() {
+				tokens, err = authClient.Refresh(ctx, tokens)
+				if err != nil {
+					return logsLoadMsg{tokens: tokens, err: err}
+				}
+				overview, overviewErr = observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+			}
+			if overviewErr == nil {
+				namespace = strings.TrimSpace(overview.Namespace)
+			}
+		}
+		if namespace == "" {
+			return logsLoadMsg{tokens: tokens, err: fmt.Errorf("no workspace namespace found yet")}
+		}
+		pods, err := observabilityAPI.ListPods(ctx, tokens.AccessToken, namespace, "primary")
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return logsLoadMsg{tokens: tokens, namespace: namespace, err: err}
+			}
+			pods, err = observabilityAPI.ListPods(ctx, tokens.AccessToken, namespace, "primary")
+		}
+		if err != nil {
+			return logsLoadMsg{tokens: tokens, namespace: namespace, err: err}
+		}
+		podName := selectedPodName
+		if podName == "" || !podExists(pods.Pods, podName) {
+			podName = firstRunningPodName(pods.Pods)
+		}
+		var lines []api.LogLine
+		if podName != "" {
+			logCtx, logCancel := context.WithTimeout(ctx, 8*time.Second)
+			lines, err = observabilityAPI.FetchPodLogs(logCtx, tokens.AccessToken, namespace, podName, "primary", 160)
+			logCancel()
+			if api.IsUnauthorized(err) && tokens.CanRefresh() {
+				tokens, err = authClient.Refresh(ctx, tokens)
+				if err != nil {
+					return logsLoadMsg{tokens: tokens, namespace: namespace, pods: pods.Pods, err: err}
+				}
+				logCtx, logCancel = context.WithTimeout(ctx, 8*time.Second)
+				lines, err = observabilityAPI.FetchPodLogs(logCtx, tokens.AccessToken, namespace, podName, "primary", 160)
+				logCancel()
+			}
+			if err != nil && len(lines) == 0 {
+				return logsLoadMsg{tokens: tokens, namespace: namespace, pods: pods.Pods, err: err}
+			}
+		}
+		return logsLoadMsg{tokens: tokens, namespace: namespace, pods: pods.Pods, lines: lines}
 	}
 }
 
@@ -1404,6 +2181,33 @@ func (m model) selectedProject() (api.LiveProject, bool) {
 		return api.LiveProject{}, false
 	}
 	return visible[clamp(m.cursor, 0, len(visible)-1)], true
+}
+
+func imageScannerImageLabel(image api.ImageScannerImage) string {
+	name := firstNonEmpty(image.Name, image.Repository, "image")
+	tag := firstNonEmpty(image.Tag, "latest")
+	return name + ":" + tag
+}
+
+func imageScanTitle(scan api.ImageScanJob) string {
+	name := firstNonEmpty(scan.ImageName, "image")
+	tag := firstNonEmpty(scan.ImageTag, "latest")
+	return name + ":" + tag
+}
+
+func imageScanStatusMessage(scan api.ImageScanJob) string {
+	status := strings.ToUpper(firstNonEmpty(scan.Status, "PENDING"))
+	if api.ImageScanFailed(status) {
+		return "Image scan failed: " + firstNonEmpty(scan.StatusMessage, imageScanTitle(scan))
+	}
+	if api.ImageScanTerminal(status) {
+		counts := api.ImageScanSeverityCounts(scan.Vulnerabilities)
+		return fmt.Sprintf("Image scan completed: %d critical, %d high", counts["CRITICAL"], counts["HIGH"])
+	}
+	if scan.Progress > 0 {
+		return fmt.Sprintf("Image scan running: %d%%", scan.Progress)
+	}
+	return "Image scan running..."
 }
 
 func Run() error {

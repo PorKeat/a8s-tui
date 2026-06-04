@@ -278,6 +278,137 @@ func TestDeploymentLeftRightDoesNotLeaveWorkspace(t *testing.T) {
 	}
 }
 
+func TestImageScannerNavigationAndScanStart(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusList
+	m.scannerImages = []api.ImageScannerImage{
+		{ID: "image-1", Name: "api", Tag: "v1"},
+		{ID: "image-2", Name: "worker", Tag: "v2"},
+	}
+	m.scannerScans = []api.ImageScanJob{{ID: "scan-1", ImageName: "api", ImageTag: "v1", Status: "COMPLETED"}}
+
+	next, cmd := m.updateKey(specialKeyMsg(tea.KeyDown))
+	m = next.(model)
+	if cmd != nil || m.scannerCursor != 1 {
+		t.Fatalf("expected image cursor to move: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyRight))
+	m = next.(model)
+	if cmd != nil || m.scannerMode != 1 {
+		t.Fatalf("expected scanner mode history: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.scannerMode != 1 || m.scannerActiveScan.ID != "scan-1" || !m.scannerReportLoading {
+		t.Fatalf("expected history scan to open: %#v cmd=%v", m, cmd)
+	}
+
+	m.scannerMode = 0
+	m.scannerReportLoading = false
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || !m.scannerLoading || m.scannerMode != 0 {
+		t.Fatalf("expected image scan to start: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestImageScanReportMessageUpdatesState(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.scannerReportLoading = true
+
+	next, _ := m.Update(imageScanReportMsg{
+		tokens: auth.TokenSet{AccessToken: "fresh"},
+		scanID: "scan-1",
+		report: `{"SchemaVersion":2,"ArtifactName":"api:v1","Results":[]}`,
+	})
+	m = next.(model)
+	if m.scannerReportLoading || m.scannerReportScanID != "scan-1" || !strings.Contains(m.scannerReport, "api:v1") {
+		t.Fatalf("report state = %#v", m)
+	}
+	if m.tokens.AccessToken != "fresh" {
+		t.Fatalf("tokens = %#v", m.tokens)
+	}
+}
+
+func TestObservabilityNavigationAndMessages(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.focus = focusSidebar
+
+	m.navCursor = m.navigationIndexByPage(pageLogs)
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.page != pageLogs || !m.logsLoading || m.focus != focusList {
+		t.Fatalf("expected logs page load: %#v cmd=%v", m, cmd)
+	}
+
+	next, _ = m.Update(logsLoadMsg{
+		tokens:    auth.TokenSet{AccessToken: "access"},
+		namespace: "workspace-dev",
+		pods: []api.PodSummary{
+			{Name: "api-0", Phase: "Running"},
+			{Name: "worker-0", Phase: "Pending"},
+		},
+		lines: []api.LogLine{{Pod: "api-0", Level: "success", Message: "server started"}},
+	})
+	m = next.(model)
+	if m.logsLoading || m.logsNamespace != "workspace-dev" || len(m.logsPods) != 2 || len(m.logsLines) != 1 {
+		t.Fatalf("logs state = %#v", m)
+	}
+
+	next, _ = m.updateKey(keyMsg("j"))
+	m = next.(model)
+	if m.logsCursor != 1 {
+		t.Fatalf("logsCursor = %d", m.logsCursor)
+	}
+
+	m.focus = focusSidebar
+	m.navCursor = m.navigationIndexByPage(pageMonitoring)
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.page != pageMonitoring || !m.monitoringLoading {
+		t.Fatalf("expected monitoring page load: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestMonitoringLoadUpdatesOverview(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	next, _ := m.Update(monitoringLoadMsg{
+		tokens: auth.TokenSet{AccessToken: "fresh"},
+		overview: api.MonitoringOverview{
+			Namespace: "workspace-dev",
+			Projects: []api.MonitoringProjectMetrics{
+				{Name: "api", TotalPods: 1, RunningPods: 1},
+			},
+		},
+	})
+	m = next.(model)
+	if m.monitoringLoading || m.monitoringOverview.Namespace != "workspace-dev" || m.tokens.AccessToken != "fresh" {
+		t.Fatalf("monitoring state = %#v", m)
+	}
+}
+
+func TestResourceMonitorPercentHelpers(t *testing.T) {
+	if got := resourcePercent(4, 8, 0, 0); got != 50 {
+		t.Fatalf("resourcePercent with limit = %d", got)
+	}
+	if got := resourcePercent(0, 0, 2, 8); got != 25 {
+		t.Fatalf("resourcePercent fallback = %d", got)
+	}
+	if got := resourcePercent(12, 8, 0, 0); got != 100 {
+		t.Fatalf("resourcePercent clamp = %d", got)
+	}
+	if got := networkPercent(5*1024*1024, 5*1024*1024); got != 40 {
+		t.Fatalf("networkPercent = %d", got)
+	}
+}
+
 func TestUserSettingsCanToggleTheme(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady

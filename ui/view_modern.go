@@ -67,6 +67,12 @@ func (m model) modernLeftPane(width, height int) string {
 	switch {
 	case m.dbFormOpen || m.monolithFormOpen || (m.page == pageDeployment && m.focus != focusSidebar):
 		return modernPane(width, height, active, m.modernDeploymentList(contentWidth, contentHeight))
+	case m.page == pageImageScanner && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernImageScannerList(contentWidth, contentHeight))
+	case m.page == pageLogs && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernLogsList(contentWidth, contentHeight))
+	case m.page == pageMonitoring && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernMonitoringList(contentWidth, contentHeight))
 	case m.page == pageProjects && (m.focus == focusList || m.projectDetailOpen || m.deleteConfirmOpen):
 		return modernPane(width, height, active, m.modernProjectList(contentWidth, contentHeight))
 	default:
@@ -92,6 +98,12 @@ func (m model) modernRightPane(width, height int) string {
 		return modernPane(width, height, false, m.modernProjectDetail(contentWidth, contentHeight, false))
 	case m.page == pageDeployment && m.focus != focusSidebar:
 		return modernPane(width, height, active, m.modernDeploymentDetail(contentWidth, contentHeight))
+	case m.page == pageImageScanner && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernImageScannerDetail(contentWidth, contentHeight))
+	case m.page == pageLogs && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernLogsDetail(contentWidth, contentHeight))
+	case m.page == pageMonitoring && m.focus != focusSidebar:
+		return modernPane(width, height, active, m.modernMonitoringDetail(contentWidth, contentHeight))
 	case m.page == pageUserSettings && m.focus != focusSidebar:
 		return modernPane(width, height, active, m.modernUserSettingsDetail(contentWidth, contentHeight))
 	default:

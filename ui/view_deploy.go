@@ -43,7 +43,13 @@ func (m model) renderDashboardDatabaseDeployForm(width, height int) []string {
 
 func (m model) renderDashboardMonolithicDeployForm(width, height int) []string {
 	lines := make([]string, 0, height)
-	header := dashboardHeader("Monolithic", "Deploy the Git project from this terminal directory.", width)
+	title := "Monolithic"
+	lead := "Deploy the Git project from this terminal directory."
+	if m.monolithForm.isMicroservices() {
+		title = "Microservices"
+		lead = "Deploy one service into a microservice workspace."
+	}
+	header := dashboardHeader(title, lead, width)
 	lines = append(lines, header...)
 	cardLines := monolithicDeployFormCard(m, width)
 	viewportHeight := max(height-len(lines), 1)
@@ -86,10 +92,10 @@ func monolithicFormFocusLine(focus int) int {
 	if focus < 0 {
 		return 0
 	}
-	if focus <= 3 {
+	if focus <= 6 {
 		return 7 + focus*3
 	}
-	return 20
+	return 29
 }
 
 func deploymentFeatureCard(width int, activeIndex int) []string {
@@ -239,8 +245,8 @@ func monolithicDeployFormCard(m model, width int) []string {
 	}
 	lines := []string{
 		cardContentLine(card, "", width),
-		cardContentLine(card, "  "+title.Render("Deploy Project")+bodyStyle.Render("  ")+mutedStyle.Render("current directory"), width),
-		cardContentLine(card, "  "+mutedStyle.Render("Vercel-style deploy from Git. Enter submits on Deploy."), width),
+		cardContentLine(card, "  "+title.Render("Deploy "+m.monolithForm.title())+bodyStyle.Render("  ")+mutedStyle.Render("current directory"), width),
+		cardContentLine(card, "  "+mutedStyle.Render(monolithicDeployHelpText(m.monolithForm)), width),
 		cardContentLine(card, "  "+mutedStyle.Render("Directory: ")+bodyStyle.Render(directory), width),
 		cardContentLine(card, "", width),
 	}
@@ -253,6 +259,25 @@ func monolithicDeployFormCard(m model, width int) []string {
 		{1, "Git remote", m.monolithForm.repoURL},
 		{2, "Branch", m.monolithForm.branch},
 		{3, "App port", m.monolithForm.appPort},
+	}
+	if m.monolithForm.isMicroservices() {
+		fields = append(fields,
+			struct {
+				index int
+				label string
+				value string
+			}{4, "Service name", m.monolithForm.serviceName},
+			struct {
+				index int
+				label string
+				value string
+			}{5, "Framework", m.monolithForm.framework},
+			struct {
+				index int
+				label string
+				value string
+			}{6, "Service type", m.monolithForm.serviceType},
+		)
 	}
 	for _, field := range fields {
 		lines = append(lines, monolithicDeployFieldBox(card, cardWidth, width, m, field.index, field.label, field.value)...)
@@ -269,6 +294,13 @@ func monolithicDeployFormCard(m model, width int) []string {
 	}
 	lines = append(lines, cardContentLine(card, "", width))
 	return lines
+}
+
+func monolithicDeployHelpText(form monolithicDeployForm) string {
+	if form.isMicroservices() {
+		return "Paste a Git remote. Enter submits a one-service microservice deploy."
+	}
+	return "Vercel-style deploy from Git. Enter submits on Deploy."
 }
 
 func databaseDeployFieldBox(card lipgloss.Style, cardWidth, width int, m model, index int, label, value string) []string {
@@ -386,7 +418,7 @@ func databaseDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model)
 }
 
 func monolithicDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m model) []string {
-	active := m.monolithForm.focus == 4
+	active := m.monolithForm.focus == m.monolithForm.fieldCount()-1
 	rowBg := lipgloss.Color(colorBgCard)
 	border := lipgloss.Color(colorBorder)
 	labelStyle := mainBodyStyle(colorBgCard)
@@ -394,7 +426,11 @@ func monolithicDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m mode
 		border = lipgloss.Color(colorPrimary)
 		labelStyle = mainPrimaryStyle(colorBgCard)
 	}
-	label := labelStyle.Render("Deploy")
+	labelText := "Deploy"
+	if m.monolithForm.isMicroservices() {
+		labelText = "Deploy Microservice"
+	}
+	label := labelStyle.Render(labelText)
 	box := lipgloss.NewStyle().
 		Background(rowBg).
 		Foreground(lipgloss.Color(colorText)).

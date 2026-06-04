@@ -322,6 +322,82 @@ func TestCreateMonolithicDeployment(t *testing.T) {
 	}
 }
 
+func TestCreateMicroserviceDeployment(t *testing.T) {
+	var sawProfile bool
+	var sawCreate bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/v1/profile/me":
+			sawProfile = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"userId": "user-1"})
+		case "/api/v1/projects/microservices":
+			sawCreate = true
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %q", r.Method)
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			services, ok := payload["services"].([]any)
+			if !ok || len(services) != 1 {
+				t.Fatalf("services = %#v", payload["services"])
+			}
+			service, ok := services[0].(map[string]any)
+			if !ok {
+				t.Fatalf("service = %#v", services[0])
+			}
+			if payload["userId"] != "user-1" || payload["projectName"] != "commerce" || service["name"] != "api" || service["repoUrl"] != "https://github.com/team/api.git" {
+				t.Fatalf("payload = %#v", payload)
+			}
+			if service["serviceType"] != "backend" || service["repoProvider"] != "github" || service["primaryPublic"] != true {
+				t.Fatalf("service payload = %#v", service)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projectId":      "project-1",
+				"name":           "commerce",
+				"status":         "CREATED",
+				"queueItemId":    "43",
+				"jenkinsJobName": "deploy-microservices",
+			})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	deployment, err := client.CreateMicroserviceDeployment(context.Background(), "access", CreateMicroserviceDeploymentInput{
+		ProjectName: "commerce",
+		Branch:      "main",
+		Services: []CreateMicroserviceServiceInput{{
+			Name:          "api",
+			RepoURL:       "https://github.com/team/api.git",
+			RepoFullName:  "team/api",
+			Branch:        "main",
+			AppPort:       8080,
+			ServiceType:   "backend",
+			Framework:     "Go",
+			ExposePublic:  true,
+			PrimaryPublic: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawProfile || !sawCreate {
+		t.Fatalf("expected profile and create calls")
+	}
+	if deployment.ProjectID != "project-1" || deployment.QueueItemID != 43 || deployment.JenkinsJobName != "deploy-microservices" {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
 func TestFetchDatabaseDeployment(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/database-deployments/db-1" {

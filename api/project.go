@@ -87,6 +87,26 @@ type CreateMonolithicDeploymentInput struct {
 	AutoDeployEnabled bool   `json:"autoDeployEnabled,omitempty"`
 }
 
+type CreateMicroserviceDeploymentInput struct {
+	ProjectName string
+	Branch      string
+	Services    []CreateMicroserviceServiceInput
+}
+
+type CreateMicroserviceServiceInput struct {
+	Name          string
+	RepoURL       string
+	RepoFullName  string
+	RepoProvider  string
+	Path          string
+	Branch        string
+	AppPort       int
+	ServiceType   string
+	Framework     string
+	ExposePublic  bool
+	PrimaryPublic bool
+}
+
 type MonolithicDeploymentRecord struct {
 	ProjectID         string
 	Name              string
@@ -368,6 +388,73 @@ func (c ProjectClient) CreateMonolithicDeployment(
 	var payload map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return MonolithicDeploymentRecord{}, fmt.Errorf("decode monolithic deployment response: %w", err)
+	}
+	return normalizeMonolithicDeployment(payload), nil
+}
+
+func (c ProjectClient) CreateMicroserviceDeployment(
+	ctx context.Context,
+	token string,
+	input CreateMicroserviceDeploymentInput,
+) (MonolithicDeploymentRecord, error) {
+	backendUserID, _, err := c.fetchBackendUserID(ctx, token)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/projects/microservices")
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	services := make([]map[string]any, 0, len(input.Services))
+	for _, service := range input.Services {
+		item := map[string]any{
+			"name":          strings.TrimSpace(service.Name),
+			"repoUrl":       strings.TrimSpace(service.RepoURL),
+			"repoFullName":  strings.TrimSpace(service.RepoFullName),
+			"repoProvider":  firstNonEmpty(strings.TrimSpace(service.RepoProvider), "github"),
+			"branch":        firstNonEmpty(strings.TrimSpace(service.Branch), strings.TrimSpace(input.Branch), "main"),
+			"appPort":       service.AppPort,
+			"serviceType":   firstNonEmpty(strings.TrimSpace(service.ServiceType), "backend"),
+			"framework":     strings.TrimSpace(service.Framework),
+			"exposePublic":  service.ExposePublic,
+			"primaryPublic": service.PrimaryPublic,
+		}
+		if path := strings.TrimSpace(service.Path); path != "" {
+			item["path"] = path
+		}
+		services = append(services, item)
+	}
+	body := map[string]any{
+		"userId":      backendUserID,
+		"projectName": strings.TrimSpace(input.ProjectName),
+		"branch":      firstNonEmpty(strings.TrimSpace(input.Branch), "main"),
+		"services":    services,
+	}
+	payloadBytes, err := json.Marshal(body)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return MonolithicDeploymentRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return MonolithicDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return MonolithicDeploymentRecord{}, fmt.Errorf("decode microservices deployment response: %w", err)
 	}
 	return normalizeMonolithicDeployment(payload), nil
 }

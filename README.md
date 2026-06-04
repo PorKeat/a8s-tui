@@ -151,7 +151,11 @@ a8s-cli
 - **Projects Dashboard**: View live database deployments, monoliths, and microservice workspaces.
 - **Project Details**: Get connection profiles, hostnames, ports, and JDBC URLs instantly.
 - **Database Deployments**: Create single-instance databases and database clusters (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
-- **Live Logs**: Watch real-time deployment logs stream directly to your terminal.
+- **Application Deployments**: Deploy monolithic apps or a one-service microservices workspace from a Git remote.
+- **Image Scanner**: Load deployed container images, start Trivy scans, poll scan status, and review severity findings.
+- **Logs**: Inspect workspace Kubernetes pods and load recent runtime log output directly in the terminal.
+- **Monitoring**: View namespace health, resource usage, pod status, and per-project metrics from the backend monitoring API.
+- **Live Deployment Logs**: Watch deployment logs stream directly to your terminal while new workloads are created.
 - **Customizable UI**: Fully integrated themes (Dark, Light, Orange, Green, Ocean, Rose) and support for icon-less environments (set `A8S_NO_ICONS=true`).
 
 ## Keyboard Shortcuts
@@ -178,6 +182,20 @@ The UI is highly responsive and designed for power users.
 
 **User Settings:**
 - `Enter`, `Space`, or `t`: Cycle through available themes
+
+**Image Scanner:**
+- `i`, then `Enter`: Open Image Scanner
+- `Left/Right`: Switch Scan and History
+- `Up/Down` or `j/k`: Move selected image or scan
+- `Enter`: Scan the selected image or open the selected history result with its Trivy report preview
+- `r`: Refresh images and scan history
+
+**Observability:**
+- `g`, then `Enter`: Open Logs
+- `m`, then `Enter`: Open Monitoring
+- `Up/Down` or `j/k`: Move between pods or project metrics
+- `Enter`: Reload logs for the selected pod
+- `r`: Refresh the current observability view
 
 ## Development
 
