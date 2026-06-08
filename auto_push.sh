@@ -20,4 +20,7 @@ fi
 echo "🚀 Pushing to repository (origin)..."
 git push origin HEAD
 
+echo "🚀 Pushing to repository (private)..."
+git push private HEAD
+
 echo "✅ Done!"
