@@ -15,6 +15,14 @@
     "type": "git",
     "url": "git+https://github.com/PorKeat/a8s-tui.git"
   },
+  "keywords": [
+    "cli",
+    "terminal",
+    "dashboard",
+    "kubernetes",
+    "tui",
+    "a8s"
+  ],
   "author": "PorKeat",
   "license": "MIT"
 }
