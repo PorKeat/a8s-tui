@@ -6,7 +6,7 @@
     "bin/"
   ],
   "bin": {
-    "a8s-cli": "bin/a8s-cli.js"
+    "a8s-tui": "bin/a8s-tui.js"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

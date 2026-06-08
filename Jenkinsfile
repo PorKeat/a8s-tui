@@ -148,11 +148,11 @@ EOF
                             
                             # Copy all binaries from dist into bin so they get packaged into NPM
                             mkdir -p bin
-                            cp dist/a8s-cli_darwin_amd64_v1/a8s-cli bin/a8s-cli_darwin_amd64 || true
-                            cp dist/a8s-cli_darwin_arm64/a8s-cli bin/a8s-cli_darwin_arm64 || true
-                            cp dist/a8s-cli_linux_amd64_v1/a8s-cli bin/a8s-cli_linux_amd64 || true
-                            cp dist/a8s-cli_linux_arm64/a8s-cli bin/a8s-cli_linux_arm64 || true
-                            cp dist/a8s-cli_windows_amd64_v1/a8s-cli.exe bin/a8s-cli_windows_amd64.exe || true
+                            cp dist/a8s-tui_darwin_amd64_v1/a8s-tui bin/a8s-tui_darwin_amd64 || true
+                            cp dist/a8s-tui_darwin_arm64/a8s-tui bin/a8s-tui_darwin_arm64 || true
+                            cp dist/a8s-tui_linux_amd64_v1/a8s-tui bin/a8s-tui_linux_amd64 || true
+                            cp dist/a8s-tui_linux_arm64/a8s-tui bin/a8s-tui_linux_arm64 || true
+                            cp dist/a8s-tui_windows_amd64_v1/a8s-tui.exe bin/a8s-tui_windows_amd64.exe || true
                             
                             # Update package.json version
                             npm version $VERSION --no-git-tag-version

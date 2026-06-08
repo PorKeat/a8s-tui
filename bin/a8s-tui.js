@@ -15,7 +15,7 @@ if (!os || !arch) {
 }
 
 const ext = os === 'windows' ? '.exe' : '';
-const binName = `a8s-cli_${os}_${arch}${ext}`;
+const binName = `a8s-tui_${os}_${arch}${ext}`;
 const binPath = path.join(__dirname, binName);
 
 const result = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' });

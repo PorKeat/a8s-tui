@@ -1,4 +1,4 @@
-# a8s-cli
+# a8s-tui
 
 The official command-line interface and terminal dashboard for Autonomous 8s (A8S). It securely authenticates with Keycloak, connects to your backend, and lets you manage workspace projects and database deployments directly from your terminal.
 
@@ -23,7 +23,7 @@ npm install -g a8s-tui
 Run it with:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 ### PNPM
@@ -43,7 +43,7 @@ pnpm add -g a8s-tui
 Run it with:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 ### Yarn
@@ -63,7 +63,7 @@ yarn global add a8s-tui
 Run it with:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 ### Bun
@@ -83,7 +83,7 @@ bun add -g a8s-tui
 Run it with:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 The Node package installs a tiny launcher that detects your OS/CPU and runs the bundled native Go binary.
@@ -93,14 +93,14 @@ The Node package installs a tiny launcher that detects your OS/CPU and runs the 
 For macOS and Linux:
 
 ```bash
-brew tap PorKeat/a8s-tui
-brew install a8s-cli
+brew tap porkeat/a8s-tui https://github.com/PorKeat/a8s-tui
+brew install porkeat/a8s-tui/a8s-tui
 ```
 
 Run it with:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 ### Go Install
@@ -117,11 +117,11 @@ Run it with:
 a8s-tui
 ```
 
-If you want the local binary name to be `a8s-cli`, build it explicitly:
+If you want the local binary name to be `a8s-tui`, build it explicitly:
 
 ```bash
-go build -o a8s-cli .
-./a8s-cli
+go build -o a8s-tui .
+./a8s-tui
 ```
 
 ## Running Locally
@@ -135,14 +135,14 @@ go run main.go
 Or build and run:
 
 ```bash
-go build -o a8s-cli .
-./a8s-cli
+go build -o a8s-tui .
+./a8s-tui
 ```
 
 If you installed through NPM, PNPM, Yarn, Bun, or Homebrew, use:
 
 ```bash
-a8s-cli
+a8s-tui
 ```
 
 ## Features

@@ -1,5 +1,5 @@
 version: 1
-project_name: a8s-cli
+project_name: a8s-tui
 
 before:
   hooks:
@@ -52,4 +52,4 @@ brews:
     homepage: "https://github.com/PorKeat/a8s-tui"
     description: "The official CLI for Autonomous 8s"
     test: |
-      system "#{bin}/a8s-cli --version"
+      system "#{bin}/a8s-tui --version"
