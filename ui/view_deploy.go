@@ -504,7 +504,7 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+bold+fgLogo+"Deploy Database"+reset+fgMuted+"  logs"+reset)
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Project "+reset+fgText+truncatePlain(title, contentWidth-18)+reset)
-	lines = append(lines, spaces(leftMargin)+fgMuted+"Status  "+reset+statusColor+status+reset+deployStatusSuffix(deployment, contentWidth))
+	lines = append(lines, spaces(leftMargin)+fgMuted+"Status  "+reset+deploymentStatusDisplay(m, status, statusColor)+deployStatusSuffix(deployment, contentWidth))
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+paneTitle("view logs", contentWidth, true))
 
@@ -519,13 +519,31 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	if len(logLines)-start < logHeight {
 		start = max(len(logLines)-logHeight, 0)
 	}
-	for index := start; index < len(logLines) && len(lines) < height-2; index++ {
-		prefix := fgMuted + fmt.Sprintf("%03d", index+1) + reset + fgAccent + " | " + reset
-		text := fgText + truncatePlain(logLines[index], contentWidth-visibleLen(prefix)-3) + reset
+	footerLines := 0
+	if m.message != "" {
+		footerLines++
+	}
+	if m.certificatePathOpen {
+		footerLines += 2
+	} else if m.canDownloadClusterCertificate() {
+		footerLines++
+	}
+	logLimit := max(height-2-footerLines, len(lines))
+	for index := start; index < len(logLines) && len(lines) < logLimit; index++ {
+		level := api.InferLogLevel(logLines[index])
+		logColor := deploymentLogColor(level)
+		prefix := fgMuted + fmt.Sprintf("%03d", index+1) + reset + logColor + " | " + reset
+		text := logColor + truncatePlain(logLines[index], contentWidth-visibleLen(prefix)-3) + reset
 		lines = append(lines, spaces(leftMargin)+bgPane+pad(" "+prefix+text, contentWidth)+reset)
 	}
-	for len(lines) < height-2 {
+	for len(lines) < logLimit {
 		lines = append(lines, spaces(leftMargin)+bgPane+pad("", contentWidth)+reset)
+	}
+	if m.certificatePathOpen {
+		lines = append(lines, spaces(leftMargin)+fgMuted+"Save certificate path"+reset)
+		lines = append(lines, spaces(leftMargin)+fgGreen+"> "+reset+fgText+truncatePlain(m.certificatePath, contentWidth-3)+reset)
+	} else if m.canDownloadClusterCertificate() {
+		lines = append(lines, spaces(leftMargin)+fgGreen+"c "+reset+fgMuted+"download SSL certificate"+reset)
 	}
 	if m.message != "" {
 		lines = append(lines, spaces(leftMargin)+fgWarn+"* "+fgAccent+truncatePlain(m.message, contentWidth-2)+reset)
@@ -546,6 +564,26 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	return view
 }
 
+func deploymentStatusDisplay(m model, status string, color string) string {
+	if api.DatabaseDeploymentTerminal(status) {
+		return color + status + reset
+	}
+	return m.spinner.View() + " " + color + status + "..." + reset
+}
+
+func deploymentLogColor(level string) string {
+	switch level {
+	case "success":
+		return fgGreen
+	case "warn":
+		return fgWarn
+	case "error":
+		return fgError
+	default:
+		return fgText
+	}
+}
+
 func deployStatusSuffix(deployment api.DatabaseDeploymentRecord, width int) string {
 	message := firstNonEmpty(deployment.StatusMessage, deployment.ID)
 	if message == "" {
@@ -556,6 +594,12 @@ func deployStatusSuffix(deployment api.DatabaseDeploymentRecord, width int) stri
 
 func (m model) databaseDeployLogStatusline(width int) string {
 	left := bgBar + bold + fgLogo + " deploy logs " + reset
-	right := bgBar + fgMuted + " arrows/jk scroll  r refresh  b/esc projects  q quit " + reset
+	certificate := ""
+	if m.certificatePathOpen {
+		certificate = " enter save  esc cancel "
+	} else if m.canDownloadClusterCertificate() {
+		certificate = " c certificate "
+	}
+	right := bgBar + fgMuted + " arrows/jk scroll  r refresh " + certificate + " b/esc projects  q quit " + reset
 	return left + fill(width-visibleLen(left)-visibleLen(right), bgBar+" "+reset) + right
 }

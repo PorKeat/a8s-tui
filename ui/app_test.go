@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"context"
 	"github.com/PorKeat/a8s-tui/api"
 	"github.com/PorKeat/a8s-tui/auth"
 	"github.com/PorKeat/a8s-tui/config"
 	"github.com/PorKeat/a8s-tui/ui/features/settings"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -394,6 +397,23 @@ func TestMonitoringLoadUpdatesOverview(t *testing.T) {
 	}
 }
 
+func TestClusterInputLeavesNamespaceForAuthenticatedResolution(t *testing.T) {
+	form := newDatabaseDeployForm()
+	form.mode = "cluster"
+	form.projectName = "orders-ha"
+	form.databaseName = "orders"
+	form.username = "orders-user"
+	form.password = "secret"
+
+	input, err := form.clusterInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Namespace != "" {
+		t.Fatalf("cluster namespace should be resolved from workspace bootstrap, got %q", input.Namespace)
+	}
+}
+
 func TestResourceMonitorPercentHelpers(t *testing.T) {
 	if got := resourcePercent(4, 8, 0, 0); got != 50 {
 		t.Fatalf("resourcePercent with limit = %d", got)
@@ -549,6 +569,47 @@ func TestProjectDeleteConfirmationFlow(t *testing.T) {
 	}
 }
 
+func TestMonolithProjectDetailStartsRouteCheck(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageProjects
+	m.focus = focusList
+	m.projectDetailOpen = true
+	m.projects = []api.LiveProject{{ID: "project-1", Name: "web", Kind: "monolith", Status: "DEPLOYED", DeployURL: "https://web.example.com"}}
+
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || !m.routeCheckLoading || m.routeCheck.ProjectID != "project-1" {
+		t.Fatalf("expected route check to start: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyRight))
+	m = next.(model)
+	if cmd != nil || m.projectDetailButton != 1 {
+		t.Fatalf("expected delete action to be selected: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestRouteCheckMessagesUpdateProjectDetail(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.routeCheckLoading = true
+	m.routeCheck = api.RouteCheckJob{JobID: "job-1", ProjectID: "project-1", Status: "RUNNING"}
+
+	next, cmd := m.Update(routeCheckPollMsg{
+		tokens: auth.TokenSet{AccessToken: "fresh"},
+		job: api.RouteCheckJob{
+			JobID:     "job-1",
+			ProjectID: "project-1",
+			Status:    "COMPLETED",
+			Summary:   api.RouteCheckSummary{Passed: 3, Failed: 1},
+		},
+	})
+	m = next.(model)
+	if cmd != nil || m.routeCheckLoading || m.routeCheck.Summary.Passed != 3 || !strings.Contains(m.message, "3 passed") {
+		t.Fatalf("route check state = %#v cmd=%v", m, cmd)
+	}
+}
+
 func TestBackspaceOnEmptyMonolithicGitRemoteDoesNotCrash(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady
@@ -669,6 +730,305 @@ func TestDatabaseDeployResultOpensLogView(t *testing.T) {
 	}
 	if m.tokens.AccessToken != "access" {
 		t.Fatalf("tokens = %#v", m.tokens)
+	}
+}
+
+func TestClusterDeployResultOpensLiveLogView(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	next, cmd := m.Update(clusterDeployResultMsg{
+		tokens: auth.TokenSet{AccessToken: "access"},
+		deployment: api.ClusterDeploymentRecord{
+			ClusterID:         "cluster-1",
+			ReleaseName:       "orders-db",
+			Name:              "orders",
+			Namespace:         "workspace-a",
+			TargetClusterName: "primary",
+			Status:            "DEPLOYING",
+			Stdout:            "GitOps values created.",
+		},
+	})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("cluster deployment should start its live log stream")
+	}
+	if !m.deployLogOpen || m.deployLog.ID != "cluster-1" || m.clusterLogRelease != "orders-db" {
+		t.Fatalf("deploy log state = %#v", m)
+	}
+}
+
+func TestClusterDeploymentStreamAppendsLogsAndCompletes(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.deployLogOpen = true
+	m.clusterLogNamespace = "workspace-a"
+	m.clusterLogRelease = "orders-db"
+	m.deployLog = api.DatabaseDeploymentRecord{
+		ID:          "cluster-1",
+		ReleaseName: "orders-db",
+		ProjectName: "orders",
+		Status:      "DEPLOYING",
+		StatusLog:   "GitOps values created.",
+	}
+
+	next, cmd := m.Update(clusterDeploymentStreamMsg{
+		namespace:   "workspace-a",
+		releaseName: "orders-db",
+		chunk: api.ClusterDeploymentStreamChunk{
+			Lines:     []string{"Release pod readiness: 3/3 ready, 3/3 running.", "Deployment stream completed. All release pods are Running and Ready."},
+			Completed: true,
+		},
+	})
+	m = next.(model)
+	if cmd != nil {
+		t.Fatal("completed cluster deployment should stop streaming")
+	}
+	if m.deployLog.Status != "DEPLOYED" || !strings.Contains(m.deployLog.StatusLog, "3/3 ready") {
+		t.Fatalf("deploy log = %#v", m.deployLog)
+	}
+}
+
+func TestClusterDeploymentStatusStopsStreamWhenBackendIsDeployed(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.deployLogOpen = true
+	m.clusterLogNamespace = "workspace-a"
+	m.clusterLogRelease = "orders-db"
+	m.deployLog = api.DatabaseDeploymentRecord{
+		ID:          "cluster-1",
+		ReleaseName: "orders-db",
+		ProjectName: "orders",
+		Status:      "DEPLOYING",
+	}
+
+	next, cmd := m.Update(clusterDeploymentStreamMsg{
+		namespace:   "workspace-a",
+		releaseName: "orders-db",
+		deployment: api.ClusterDeploymentRecord{
+			ClusterID:     "cluster-1",
+			Status:        "DEPLOYED",
+			StatusMessage: "All pods ready",
+		},
+	})
+	m = next.(model)
+	if cmd != nil {
+		t.Fatal("deployed cluster should stop streaming")
+	}
+	if m.deployLog.Status != "DEPLOYED" || !strings.Contains(m.message, "finished") {
+		t.Fatalf("deploy log state = %#v message=%q", m.deployLog, m.message)
+	}
+}
+
+func TestClusterDeploymentReadyStatusWinsOverStreamError(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.deployLogOpen = true
+	m.clusterLogNamespace = "workspace-a"
+	m.clusterLogRelease = "orders-db"
+	m.deployLog = api.DatabaseDeploymentRecord{
+		ID:             "orders-db",
+		ReleaseName:    "orders-db",
+		ProjectName:    "orders",
+		DeploymentMode: "cluster",
+		Status:         "DEPLOYING",
+	}
+
+	next, cmd := m.Update(clusterDeploymentStreamMsg{
+		namespace:   "workspace-a",
+		releaseName: "orders-db",
+		deployment: api.ClusterDeploymentRecord{
+			ClusterID: "cluster-uuid",
+			Status:    "READY",
+		},
+		err: context.DeadlineExceeded,
+	})
+	m = next.(model)
+	if cmd != nil {
+		t.Fatal("ready cluster should stop even when the stream times out")
+	}
+	if m.deployLog.Status != "DEPLOYED" || m.deployLog.ID != "cluster-uuid" {
+		t.Fatalf("deploy log = %#v", m.deployLog)
+	}
+}
+
+func TestReadyClusterStillCollectsFinalStreamLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/cluster/namespaces/workspace-a/clusters/cluster-1":
+			_, _ = w.Write([]byte(`{"clusterId":"cluster-1","releaseName":"orders-db","status":"DEPLOYED"}`))
+		case "/api/kubernetes/namespaces/workspace-a/releases/orders-db/deployment-stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: console-log\ndata: {\"content\":\"Release pod readiness: 3/3 ready, 3/3 running.\"}\n\n"))
+			_, _ = w.Write([]byte("event: console-log\ndata: {\"content\":\"Deployment stream completed. All release pods are Running and Ready.\"}\n\n"))
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	m := initialModel(config.AppConfig{BackendBaseURL: server.URL}, nil)
+	m.tokens = auth.TokenSet{AccessToken: "access"}
+	m.deployLogOpen = true
+	m.clusterLogNamespace = "workspace-a"
+	m.clusterLogRelease = "orders-db"
+	m.deployLog = api.DatabaseDeploymentRecord{ID: "cluster-1", ProjectName: "orders", Status: "DEPLOYING"}
+
+	msg := m.fetchClusterDeploymentStreamCmd(0)()
+	result, ok := msg.(clusterDeploymentStreamMsg)
+	if !ok {
+		t.Fatalf("message = %#v", msg)
+	}
+	if result.deployment.Status != "DEPLOYED" || !result.chunk.Completed || len(result.chunk.Lines) != 2 {
+		t.Fatalf("stream result = %#v", result)
+	}
+}
+
+func TestDeploymentLogsFollowNewLines(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.deployLogOpen = true
+	m.deployLogFollow = true
+	m.deployLog = api.DatabaseDeploymentRecord{
+		ID:        "db-1",
+		Status:    "DEPLOYING",
+		StatusLog: "queued\ncreating",
+	}
+	m.followLatestDeploymentLog()
+
+	next, _ := m.Update(databaseDeploymentPollMsg{
+		deployment: api.DatabaseDeploymentRecord{
+			ID:        "db-1",
+			Status:    "DEPLOYING",
+			StatusLog: "queued\ncreating\nready",
+		},
+	})
+	m = next.(model)
+	if !m.deployLogFollow || m.deployLogOffset != 2 {
+		t.Fatalf("expected logs to follow latest line: follow=%v offset=%d", m.deployLogFollow, m.deployLogOffset)
+	}
+}
+
+func TestDeploymentLogManualScrollPausesAndResumesFollow(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.deployLogOpen = true
+	m.deployLogFollow = true
+	m.deployLog = api.DatabaseDeploymentRecord{StatusLog: "one\ntwo\nthree"}
+	m.followLatestDeploymentLog()
+
+	next, _ := m.updateDeploymentLog(specialKeyMsg(tea.KeyUp))
+	m = next.(model)
+	if m.deployLogFollow || m.deployLogOffset != 1 {
+		t.Fatalf("expected up to pause following: follow=%v offset=%d", m.deployLogFollow, m.deployLogOffset)
+	}
+
+	next, _ = m.updateDeploymentLog(specialKeyMsg(tea.KeyDown))
+	m = next.(model)
+	if !m.deployLogFollow || m.deployLogOffset != 2 {
+		t.Fatalf("expected returning to latest line to resume following: follow=%v offset=%d", m.deployLogFollow, m.deployLogOffset)
+	}
+}
+
+func TestDeploymentLogSeverityColors(t *testing.T) {
+	if deploymentLogColor("success") != fgGreen {
+		t.Fatal("success logs should be green")
+	}
+	if deploymentLogColor("warn") != fgWarn {
+		t.Fatal("warning logs should be yellow")
+	}
+	if deploymentLogColor("error") != fgError {
+		t.Fatal("error logs should be red")
+	}
+	if deploymentLogColor("info") != fgText {
+		t.Fatal("informational logs should use the normal text color")
+	}
+}
+
+func TestDeploymentStatusDisplayShowsLoadingForActiveDeployment(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	active := deploymentStatusDisplay(m, "DEPLOYING", fgWarn)
+	if !strings.Contains(active, "DEPLOYING...") {
+		t.Fatalf("active status = %q", active)
+	}
+	complete := deploymentStatusDisplay(m, "DEPLOYED", fgGreen)
+	if strings.Contains(complete, "...") {
+		t.Fatalf("terminal status should not animate: %q", complete)
+	}
+}
+
+func TestSaveClusterCertificateUsesChosenPathAndAvoidsOverwrite(t *testing.T) {
+	directory := t.TempDir()
+	certificate := api.ClusterCertificate{
+		Filename: "postgresql-ca.crt",
+		Content:  []byte("certificate"),
+	}
+	chosenPath := filepath.Join(directory, "chosen-name.crt")
+	first, err := saveClusterCertificate(chosenPath, "mama deployment", certificate, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != chosenPath {
+		t.Fatalf("path = %q", first)
+	}
+	if _, err := saveClusterCertificate(chosenPath, "mama deployment", certificate, false); err == nil {
+		t.Fatal("expected existing certificate path to be rejected")
+	}
+	info, err := os.Stat(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("certificate permissions = %o", info.Mode().Perm())
+	}
+}
+
+func TestCertificateSaveDialogFallbackSupportsPasteAndSave(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.deployLogOpen = true
+	m.clusterLogNamespace = "workspace-a"
+	m.deployLog = api.DatabaseDeploymentRecord{ID: "cluster-1", DeploymentMode: "cluster", Status: "DEPLOYED"}
+
+	next, cmd := m.updateDeploymentLog(keyMsg("c"))
+	m = next.(model)
+	if cmd == nil || m.certificatePathOpen {
+		t.Fatalf("expected native save dialog command: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.Update(certificatePathChoiceMsg{err: errNativeSaveDialogUnavailable})
+	m = next.(model)
+	if cmd != nil || !m.certificatePathOpen || m.certificatePath == "" {
+		t.Fatalf("expected certificate path fallback: %#v cmd=%v", m, cmd)
+	}
+
+	m.certificatePath = ""
+	next, _ = m.updatePaste(tea.PasteMsg{Content: "/tmp/custom-ca.crt\n"})
+	m = next.(model)
+	if m.certificatePath != "/tmp/custom-ca.crt" {
+		t.Fatalf("certificate path = %q", m.certificatePath)
+	}
+
+	next, cmd = m.updateCertificatePath(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.certificatePathOpen {
+		t.Fatalf("expected save command: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestCertificateSaveDialogChoiceStartsDownload(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	next, cmd := m.Update(certificatePathChoiceMsg{path: "/tmp/mama-ca.crt"})
+	m = next.(model)
+	if cmd == nil || !strings.Contains(m.message, "Downloading") {
+		t.Fatalf("expected certificate download command: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestClusterCertificateAvailableOnlyAfterSuccessfulClusterDeployment(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.clusterLogNamespace = "workspace-a"
+	m.deployLog = api.DatabaseDeploymentRecord{ID: "cluster-1", DeploymentMode: "cluster", Status: "DEPLOYING"}
+	if m.canDownloadClusterCertificate() {
+		t.Fatal("certificate should not be available while deployment is running")
+	}
+	m.deployLog.Status = "DEPLOYED"
+	if !m.canDownloadClusterCertificate() {
+		t.Fatal("certificate should be available after a successful cluster deployment")
 	}
 }
 

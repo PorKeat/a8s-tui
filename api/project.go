@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -160,6 +162,11 @@ type ClusterDeploymentRecord struct {
 	ExitCode          int
 	StartedAt         string
 	FinishedAt        string
+}
+
+type ClusterCertificate struct {
+	Filename string
+	Content  []byte
 }
 
 type ProjectClient struct {
@@ -334,6 +341,150 @@ func (c ProjectClient) CreateClusterDeployment(
 		return ClusterDeploymentRecord{}, fmt.Errorf("decode cluster deployment response: %w", err)
 	}
 	return normalizeClusterDeployment(payload), nil
+}
+
+func (c ProjectClient) FetchClusterDeployment(
+	ctx context.Context,
+	token string,
+	namespace string,
+	clusterID string,
+) (ClusterDeploymentRecord, error) {
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "clusters", clusterID)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ClusterDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ClusterDeploymentRecord{}, fmt.Errorf("decode cluster deployment response: %w", err)
+	}
+	return normalizeClusterDeployment(payload), nil
+}
+
+func (c ProjectClient) ResolveClusterDeployment(
+	ctx context.Context,
+	token string,
+	namespace string,
+	clusterID string,
+	releaseName string,
+	projectName string,
+) (ClusterDeploymentRecord, error) {
+	if strings.TrimSpace(clusterID) != "" {
+		deployment, err := c.FetchClusterDeployment(ctx, token, namespace, clusterID)
+		if err == nil {
+			return deployment, nil
+		}
+	}
+
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "clusters")
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return ClusterDeploymentRecord{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ClusterDeploymentRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ClusterDeploymentRecord{}, fmt.Errorf("decode cluster deployments response: %w", err)
+	}
+	for _, raw := range payload {
+		deployment := normalizeClusterDeployment(raw)
+		if clusterDeploymentMatches(deployment, clusterID, releaseName, projectName) {
+			return deployment, nil
+		}
+	}
+	return ClusterDeploymentRecord{}, fmt.Errorf("cluster deployment %q was not found in namespace %q", firstNonEmpty(projectName, releaseName, clusterID), namespace)
+}
+
+func clusterDeploymentMatches(deployment ClusterDeploymentRecord, clusterID, releaseName, projectName string) bool {
+	for _, pair := range [][2]string{
+		{deployment.ClusterID, clusterID},
+		{deployment.ReleaseName, releaseName},
+		{deployment.Name, projectName},
+	} {
+		if strings.TrimSpace(pair[1]) != "" && strings.EqualFold(strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c ProjectClient) DownloadClusterCertificate(
+	ctx context.Context,
+	token string,
+	namespace string,
+	clusterID string,
+) (ClusterCertificate, error) {
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "clusters", clusterID, "certificate")
+	if err != nil {
+		return ClusterCertificate{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ClusterCertificate{}, err
+	}
+	req.Header.Set("Accept", "application/x-pem-file, text/plain")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return ClusterCertificate{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ClusterCertificate{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+	content, err := io.ReadAll(io.LimitReader(res.Body, 2*1024*1024))
+	if err != nil {
+		return ClusterCertificate{}, fmt.Errorf("read cluster certificate: %w", err)
+	}
+	if len(content) == 0 {
+		return ClusterCertificate{}, errors.New("cluster certificate response was empty")
+	}
+	return ClusterCertificate{
+		Filename: certificateResponseFilename(res.Header.Get("Content-Disposition")),
+		Content:  content,
+	}, nil
+}
+
+func certificateResponseFilename(disposition string) string {
+	_, params, err := mime.ParseMediaType(disposition)
+	if err == nil {
+		if filename := strings.TrimSpace(params["filename"]); filename != "" {
+			return filename
+		}
+	}
+	return "database-ca.crt"
 }
 
 func (c ProjectClient) CreateMonolithicDeployment(
@@ -989,7 +1140,7 @@ func ParseDeploymentLogLines(statusLog string) []string {
 
 func DatabaseDeploymentTerminal(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "DEPLOYED", "READY", "RUNNING", "SUCCESS", "SUCCEEDED", "FAILED", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
+	case "DEPLOYED", "READY", "RUNNING", "SUCCESS", "SUCCESSFUL", "SUCCEEDED", "COMPLETED", "FAILED", "FAILURE", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
 		return true
 	default:
 		return false
@@ -998,7 +1149,7 @@ func DatabaseDeploymentTerminal(status string) bool {
 
 func DatabaseDeploymentFailed(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "FAILED", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
+	case "FAILED", "FAILURE", "ERROR", "UNHEALTHY", "CANCELLED", "CANCELED":
 		return true
 	default:
 		return false

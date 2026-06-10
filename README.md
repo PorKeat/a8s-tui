@@ -148,11 +148,11 @@ a8s-tui
 ## Features
 
 - **Authentication**: Seamless Keycloak integration with automatic token refreshing.
-- **Projects Dashboard**: View live database deployments, monoliths, and microservice workspaces.
+- **Projects Dashboard**: View live database deployments, monoliths, and microservice workspaces. Monolith details can run a browser route check and show pass/fail results.
 - **Project Details**: Get connection profiles, hostnames, ports, and JDBC URLs instantly.
 - **Database Deployments**: Create single-instance databases and database clusters (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
 - **Application Deployments**: Deploy monolithic apps or a one-service microservices workspace from a Git remote.
-- **Image Scanner**: Load deployed container images, start Trivy scans, poll scan status, and review severity findings.
+- **Image Scanner**: Load deployed container images, start Trivy scans, poll scan status, and review severity findings. The API client also supports Git-repository scan targets.
 - **Logs**: Inspect workspace Kubernetes pods and load recent runtime log output directly in the terminal.
 - **Monitoring**: View namespace health, resource usage, pod status, and per-project metrics from the backend monitoring API.
 - **Live Deployment Logs**: Watch deployment logs stream directly to your terminal while new workloads are created.
@@ -182,6 +182,10 @@ The UI is highly responsive and designed for power users.
 
 **User Settings:**
 - `Enter`, `Space`, or `t`: Cycle through available themes
+
+**Project Details:**
+- Open a deployed monolith, select `Check routes`, then press `Enter` to run the backend browser route check
+- `Left/Right`, `Up/Down`, or `Tab`: Switch between project actions
 
 **Image Scanner:**
 - `i`, then `Enter`: Open Image Scanner

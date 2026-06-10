@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -263,6 +264,92 @@ func TestCreateClusterDeployment(t *testing.T) {
 	}
 }
 
+func TestFetchClusterDeployment(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/cluster/namespaces/workspace-a/clusters/cluster-1" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %q", r.Method)
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"clusterId":     "cluster-1",
+			"releaseName":   "orders-db",
+			"namespace":     "workspace-a",
+			"status":        "DEPLOYED",
+			"statusMessage": "All pods ready",
+		})
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	deployment, err := client.FetchClusterDeployment(context.Background(), "access", "workspace-a", "cluster-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ClusterID != "cluster-1" || deployment.Status != "DEPLOYED" {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
+func TestResolveClusterDeploymentFallsBackToNamespaceList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/cluster/namespaces/workspace-a/clusters/orders-db":
+			http.Error(w, "invalid UUID", http.StatusBadRequest)
+		case "/api/v1/cluster/namespaces/workspace-a/clusters":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"clusterId":   "cluster-uuid",
+				"name":        "orders",
+				"releaseName": "orders-db",
+				"namespace":   "workspace-a",
+				"status":      "DEPLOYED",
+			}})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	deployment, err := client.ResolveClusterDeployment(context.Background(), "access", "workspace-a", "orders-db", "orders-db", "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ClusterID != "cluster-uuid" || deployment.Status != "DEPLOYED" {
+		t.Fatalf("deployment = %#v", deployment)
+	}
+}
+
+func TestDownloadClusterCertificate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/cluster/namespaces/workspace-a/clusters/cluster-1/certificate" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="postgresql-ca.crt"`)
+		_, _ = w.Write([]byte("-----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----\n"))
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	certificate, err := client.DownloadClusterCertificate(context.Background(), "access", "workspace-a", "cluster-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certificate.Filename != "postgresql-ca.crt" || !strings.Contains(string(certificate.Content), "BEGIN CERTIFICATE") {
+		t.Fatalf("certificate = %#v", certificate)
+	}
+}
+
 func TestCreateMonolithicDeployment(t *testing.T) {
 	var sawProfile bool
 	var sawCreate bool
@@ -508,6 +595,28 @@ func TestParseDeploymentLogLines(t *testing.T) {
 	for i := range want {
 		if lines[i] != want[i] {
 			t.Fatalf("lines = %#v", lines)
+		}
+	}
+}
+
+func TestInferDeploymentLogLevel(t *testing.T) {
+	tests := map[string]string{
+		"Deployment completed successfully.": "success",
+		"Release is pending readiness.":      "warn",
+		"Access denied by cluster policy.":   "error",
+		"Applying GitOps values.":            "info",
+	}
+	for line, want := range tests {
+		if got := InferLogLevel(line); got != want {
+			t.Fatalf("InferLogLevel(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
+
+func TestDatabaseDeploymentTerminalSuccessAliases(t *testing.T) {
+	for _, status := range []string{"SUCCESSFUL", "COMPLETED", "DEPLOYED"} {
+		if !DatabaseDeploymentTerminal(status) || DatabaseDeploymentFailed(status) {
+			t.Fatalf("expected successful terminal status for %q", status)
 		}
 	}
 }

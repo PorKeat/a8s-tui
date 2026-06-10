@@ -84,13 +84,21 @@ type ImageScanJob struct {
 }
 
 type CreateImageScanInput struct {
-	SourceKind  string
-	ImageID     string
-	ImageRef    string
-	RegistryURL string
-	ImageName   string
-	ImageTag    string
-	ForceRescan bool
+	SourceKind        string
+	ImageID           string
+	ImageRef          string
+	RegistryURL       string
+	ImageName         string
+	ImageTag          string
+	RepositoryURL     string
+	BranchOrTag       string
+	DockerfilePath    string
+	BuildContext      string
+	TargetImageName   string
+	PrivateRepository bool
+	Username          string
+	Password          string
+	ForceRescan       bool
 }
 
 func (c ImageScannerClient) ListImages(ctx context.Context, token string) ([]ImageScannerImage, error) {
@@ -175,6 +183,17 @@ func (c ImageScannerClient) CreateScan(ctx context.Context, token string, input 
 		body["imageName"] = strings.TrimSpace(input.ImageName)
 		body["imageTag"] = strings.TrimSpace(input.ImageTag)
 		body["privateRegistry"] = false
+	case "git":
+		body["repositoryUrl"] = strings.TrimSpace(input.RepositoryURL)
+		body["branchOrTag"] = firstNonEmpty(strings.TrimSpace(input.BranchOrTag), "main")
+		body["dockerfilePath"] = firstNonEmpty(strings.TrimSpace(input.DockerfilePath), "Dockerfile")
+		body["buildContext"] = firstNonEmpty(strings.TrimSpace(input.BuildContext), ".")
+		body["targetImageName"] = strings.TrimSpace(input.TargetImageName)
+		body["privateRepository"] = input.PrivateRepository
+		if input.PrivateRepository {
+			body["username"] = strings.TrimSpace(input.Username)
+			body["password"] = input.Password
+		}
 	default:
 		body["imageId"] = strings.TrimSpace(input.ImageID)
 	}

@@ -2,8 +2,11 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -72,6 +75,8 @@ type model struct {
 	projects             []api.LiveProject
 	projectDetailOpen    bool
 	projectDetailButton  int
+	routeCheck           api.RouteCheckJob
+	routeCheckLoading    bool
 	deleteConfirmOpen    bool
 	deleteProject        api.LiveProject
 	deleteConfirmText    string
@@ -83,6 +88,12 @@ type model struct {
 	deployLogOpen        bool
 	deployLog            api.DatabaseDeploymentRecord
 	deployLogOffset      int
+	deployLogFollow      bool
+	certificatePathOpen  bool
+	certificatePath      string
+	clusterLogNamespace  string
+	clusterLogRelease    string
+	clusterLogTarget     string
 	scannerImages        []api.ImageScannerImage
 	scannerScans         []api.ImageScanJob
 	scannerCursor        int
@@ -142,6 +153,27 @@ type databaseDeploymentPollMsg struct {
 	err        error
 }
 
+type clusterDeploymentStreamMsg struct {
+	tokens      auth.TokenSet
+	namespace   string
+	releaseName string
+	target      string
+	deployment  api.ClusterDeploymentRecord
+	chunk       api.ClusterDeploymentStreamChunk
+	err         error
+}
+
+type clusterCertificateDownloadMsg struct {
+	tokens auth.TokenSet
+	path   string
+	err    error
+}
+
+type certificatePathChoiceMsg struct {
+	path string
+	err  error
+}
+
 type monolithicDeployResultMsg struct {
 	tokens     auth.TokenSet
 	deployment api.MonolithicDeploymentRecord
@@ -198,6 +230,18 @@ type projectDeleteResultMsg struct {
 	tokens  auth.TokenSet
 	project api.LiveProject
 	err     error
+}
+
+type routeCheckStartMsg struct {
+	tokens auth.TokenSet
+	job    api.RouteCheckJob
+	err    error
+}
+
+type routeCheckPollMsg struct {
+	tokens auth.TokenSet
+	job    api.RouteCheckJob
+	err    error
 }
 
 type databaseDeployForm struct {
@@ -330,7 +374,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dbForm = newDatabaseDeployForm()
 		m.deployLogOpen = true
 		m.deployLog = msg.deployment
-		m.deployLogOffset = 0
+		m.deployLogFollow = true
+		m.followLatestDeploymentLog()
+		m.clusterLogNamespace = ""
+		m.clusterLogRelease = ""
+		m.clusterLogTarget = ""
 		m.state = stateReady
 		m.message = "Database deployment accepted: " + name
 		if msg.deployment.ID == "" || api.DatabaseDeploymentTerminal(msg.deployment.Status) {
@@ -352,10 +400,62 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dbForm = newDatabaseDeployForm()
 		m.deployLogOpen = true
 		m.deployLog = clusterDeploymentLogRecord(msg.deployment)
-		m.deployLogOffset = 0
+		m.deployLogFollow = true
+		m.followLatestDeploymentLog()
+		m.clusterLogNamespace = msg.deployment.Namespace
+		m.clusterLogRelease = msg.deployment.ReleaseName
+		m.clusterLogTarget = msg.deployment.TargetClusterName
 		m.state = stateReady
 		m.message = "Database cluster deployment accepted: " + name
-		return m, nil
+		if m.clusterLogNamespace == "" || m.clusterLogRelease == "" {
+			return m, nil
+		}
+		return m, m.fetchClusterDeploymentStreamCmd(0)
+	case clusterDeploymentStreamMsg:
+		if !m.deployLogOpen || m.clusterLogNamespace == "" || m.clusterLogRelease == "" {
+			return m, nil
+		}
+		if msg.namespace != m.clusterLogNamespace || msg.releaseName != m.clusterLogRelease {
+			return m, nil
+		}
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.deployLog.StatusLog = appendUniqueDeploymentLogLines(m.deployLog.StatusLog, msg.chunk.Lines)
+		if msg.deployment.ClusterID != "" {
+			m.deployLog.ID = msg.deployment.ClusterID
+		}
+		if msg.deployment.Status != "" {
+			m.deployLog.Status = msg.deployment.Status
+			m.deployLog.StatusMessage = msg.deployment.StatusMessage
+			m.deployLog.ServiceHost = firstNonEmpty(msg.deployment.ServiceHost, m.deployLog.ServiceHost)
+			if msg.deployment.ServicePort > 0 {
+				m.deployLog.ServicePort = msg.deployment.ServicePort
+			}
+		}
+		m.syncDeploymentLogOffset()
+		if msg.chunk.Completed || api.DatabaseDeploymentTerminal(m.deployLog.Status) {
+			if msg.chunk.Completed && !api.DatabaseDeploymentFailed(m.deployLog.Status) {
+				m.deployLog.Status = "DEPLOYED"
+			}
+			name := firstNonEmpty(m.deployLog.ProjectName, m.deployLog.ReleaseName, "cluster")
+			if api.DatabaseDeploymentFailed(m.deployLog.Status) {
+				m.message = "Database cluster deployment failed: " + name
+				return m, nil
+			}
+			m.deployLog.Status = "DEPLOYED"
+			m.deployLog.StatusMessage = "All release pods are Running and Ready."
+			m.message = "Database cluster deployment finished: " + name
+			return m, nil
+		}
+		if msg.err != nil {
+			m.message = "Cluster deployment stream paused: " + msg.err.Error()
+			return m, m.fetchClusterDeploymentStreamCmd(2 * time.Second)
+		}
+		m.deployLog.Status = "DEPLOYING"
+		m.deployLog.StatusMessage = "Waiting for Kubernetes release pods..."
+		m.message = "Database cluster deployment is still running..."
+		return m, m.fetchClusterDeploymentStreamCmd(500 * time.Millisecond)
 	case databaseDeploymentPollMsg:
 		if !m.deployLogOpen {
 			return m, nil
@@ -371,7 +471,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.deployLog = msg.deployment
-		m.deployLogOffset = clamp(m.deployLogOffset, 0, max(len(api.ParseDeploymentLogLines(m.deployLog.StatusLog))-1, 0))
+		m.syncDeploymentLogOffset()
 		name := firstNonEmpty(m.deployLog.ProjectName, m.deployLog.ReleaseName, "database")
 		if api.DatabaseDeploymentTerminal(m.deployLog.Status) {
 			if api.DatabaseDeploymentFailed(m.deployLog.Status) {
@@ -383,6 +483,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.message = "Deployment is still running..."
 		return m, m.fetchDatabaseDeploymentCmd(m.deployLog.ID, 2*time.Second)
+	case clusterCertificateDownloadMsg:
+		m.certificatePath = ""
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.message = "Certificate download failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.message = "SSL certificate saved: " + msg.path
+		return m, nil
+	case certificatePathChoiceMsg:
+		switch {
+		case errors.Is(msg.err, errNativeSaveDialogCancelled):
+			m.message = "Certificate download cancelled"
+			return m, nil
+		case errors.Is(msg.err, errNativeSaveDialogUnavailable):
+			m.certificatePathOpen = true
+			m.certificatePath = m.defaultClusterCertificatePath()
+			m.message = "Native save dialog unavailable. Enter a certificate path."
+			return m, nil
+		case msg.err != nil:
+			m.message = "Could not open save dialog: " + msg.err.Error()
+			return m, nil
+		}
+		m.message = "Downloading SSL certificate..."
+		return m, m.downloadClusterCertificateCmd(msg.path, true)
 	case monolithicDeployResultMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -539,6 +666,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deleteConfirmButton = 0
 		m.message = "Deleted " + name + ". Refreshing projects..."
 		return m, m.fetchProjectsCmd()
+	case routeCheckStartMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.routeCheckLoading = false
+			m.message = "Route check failed to start: " + msg.err.Error()
+			return m, nil
+		}
+		m.routeCheck = msg.job
+		m.routeCheckLoading = !api.RouteCheckTerminal(msg.job.Status)
+		m.message = routeCheckStatusMessage(msg.job)
+		if m.routeCheckLoading {
+			return m, m.pollRouteCheckCmd(msg.job.ProjectID, msg.job.JobID, 2*time.Second)
+		}
+	case routeCheckPollMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		if msg.err != nil {
+			m.routeCheckLoading = false
+			m.message = "Route check refresh failed: " + msg.err.Error()
+			return m, nil
+		}
+		if m.routeCheck.JobID != "" && msg.job.JobID != m.routeCheck.JobID {
+			return m, nil
+		}
+		m.routeCheck = msg.job
+		m.routeCheckLoading = !api.RouteCheckTerminal(msg.job.Status)
+		m.message = routeCheckStatusMessage(msg.job)
+		if m.routeCheckLoading {
+			return m, m.pollRouteCheckCmd(msg.job.ProjectID, msg.job.JobID, 2*time.Second)
+		}
 	}
 	return m, nil
 }
@@ -546,6 +706,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.deleteConfirmOpen {
 		return m.updateDeleteConfirmation(msg)
+	}
+	if m.certificatePathOpen {
+		return m.updateCertificatePath(msg)
 	}
 	if m.deployLogOpen {
 		return m.updateDeploymentLog(msg)
@@ -767,6 +930,9 @@ func (m model) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	case m.deleteConfirmOpen:
 		m.deleteConfirmText += text
 		m.message = "Type project name and press enter to delete"
+	case m.certificatePathOpen:
+		m.certificatePath = text
+		m.message = "Press enter to save the SSL certificate"
 	case m.dbFormOpen:
 		m.appendDatabaseFormText(text)
 		m.message = "Pasted into field"
@@ -1031,6 +1197,18 @@ func (m model) submitClusterDeployment() (tea.Model, tea.Cmd) {
 				return clusterDeployResultMsg{tokens: tokens, err: err}
 			}
 		}
+		namespace, err := projectsAPI.ResolveEffectiveClusterNamespace(ctx, tokens.AccessToken, input.Namespace)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterDeployResultMsg{tokens: tokens, err: err}
+			}
+			namespace, err = projectsAPI.ResolveEffectiveClusterNamespace(ctx, tokens.AccessToken, input.Namespace)
+		}
+		if err != nil {
+			return clusterDeployResultMsg{tokens: tokens, err: err}
+		}
+		input.Namespace = namespace
 		deployment, err := projectsAPI.CreateClusterDeployment(ctx, tokens.AccessToken, input)
 		if api.IsUnauthorized(err) && tokens.CanRefresh() {
 			tokens, err = authClient.Refresh(ctx, tokens)
@@ -1080,6 +1258,23 @@ func clusterDeploymentStatusLog(deployment api.ClusterDeploymentRecord) string {
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "Cluster deployment request accepted.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func appendUniqueDeploymentLogLines(current string, next []string) string {
+	lines := api.ParseDeploymentLogLines(current)
+	seen := make(map[string]bool, len(lines))
+	for _, line := range lines {
+		seen[line] = true
+	}
+	for _, line := range next {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[line] {
+			continue
+		}
+		lines = append(lines, line)
+		seen[line] = true
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1158,20 +1353,108 @@ func (m model) updateDeploymentLog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.deployLogOpen = false
 		m.deployLog = api.DatabaseDeploymentRecord{}
 		m.deployLogOffset = 0
+		m.deployLogFollow = false
+		m.certificatePathOpen = false
+		m.certificatePath = ""
+		m.clusterLogNamespace = ""
+		m.clusterLogRelease = ""
+		m.clusterLogTarget = ""
 		m.state = stateLoading
 		m.message = "Refreshing live projects..."
 		return m, m.fetchProjectsCmd()
 	case key == "r":
+		if m.clusterLogNamespace != "" && m.clusterLogRelease != "" {
+			m.message = "Refreshing cluster deployment logs..."
+			return m, m.fetchClusterDeploymentStreamCmd(0)
+		}
 		if m.deployLog.ID != "" {
 			m.message = "Refreshing deployment logs..."
 			return m, m.fetchDatabaseDeploymentCmd(m.deployLog.ID, 0)
 		}
+	case key == "c":
+		if !m.canDownloadClusterCertificate() {
+			m.message = "SSL certificate is available after a database cluster deployment succeeds"
+			return m, nil
+		}
+		m.message = "Opening save dialog..."
+		return m, chooseCertificatePathCmd(m.defaultClusterCertificatePath())
 	case key == "up" || key == "k" || code == tea.KeyUp:
+		m.deployLogFollow = false
 		m.deployLogOffset = max(m.deployLogOffset-1, 0)
 	case key == "down" || key == "j" || code == tea.KeyDown:
-		m.deployLogOffset = min(m.deployLogOffset+1, max(len(api.ParseDeploymentLogLines(m.deployLog.StatusLog))-1, 0))
+		last := m.latestDeploymentLogOffset()
+		m.deployLogOffset = min(m.deployLogOffset+1, last)
+		m.deployLogFollow = m.deployLogOffset == last
+	case key == "end" || key == "G" || code == tea.KeyEnd:
+		m.deployLogFollow = true
+		m.followLatestDeploymentLog()
 	}
 	return m, nil
+}
+
+func (m model) updateCertificatePath(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
+	switch {
+	case key == "ctrl+c":
+		return m, tea.Quit
+	case key == "esc" || code == tea.KeyEscape:
+		m.certificatePathOpen = false
+		m.certificatePath = ""
+		m.message = "Certificate download cancelled"
+	case isEnter:
+		if strings.TrimSpace(m.certificatePath) == "" {
+			m.message = "Enter a certificate file path"
+			return m, nil
+		}
+		m.certificatePathOpen = false
+		m.message = "Downloading SSL certificate..."
+		return m, m.downloadClusterCertificateCmd(m.certificatePath, false)
+	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
+		m.certificatePath = trimLastRune(m.certificatePath)
+	case key == "ctrl+u":
+		m.certificatePath = ""
+	default:
+		if len(key) == 1 && key >= " " && key <= "~" {
+			m.certificatePath += key
+		}
+	}
+	return m, nil
+}
+
+func (m *model) syncDeploymentLogOffset() {
+	if m.deployLogFollow {
+		m.followLatestDeploymentLog()
+		return
+	}
+	m.deployLogOffset = clamp(m.deployLogOffset, 0, m.latestDeploymentLogOffset())
+}
+
+func (m *model) followLatestDeploymentLog() {
+	m.deployLogOffset = m.latestDeploymentLogOffset()
+}
+
+func (m model) latestDeploymentLogOffset() int {
+	return max(len(api.ParseDeploymentLogLines(m.deployLog.StatusLog))-1, 0)
+}
+
+func (m model) canDownloadClusterCertificate() bool {
+	return m.deployLog.DeploymentMode == "cluster" &&
+		m.clusterLogNamespace != "" &&
+		m.deployLog.ID != "" &&
+		api.DatabaseDeploymentTerminal(m.deployLog.Status) &&
+		!api.DatabaseDeploymentFailed(m.deployLog.Status)
+}
+
+func (m model) defaultClusterCertificatePath() string {
+	projectName := firstNonEmpty(m.deployLog.ProjectName, m.deployLog.ReleaseName, "database")
+	filename := certificateFilename(projectName, ".crt")
+	directory, err := os.Getwd()
+	if err != nil {
+		return filename
+	}
+	return filepath.Join(directory, filename)
 }
 
 func (m model) updateProjectDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1182,18 +1465,39 @@ func (m model) updateProjectDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key == "ctrl+c" || key == "q":
 		return m, tea.Quit
 	case key == "tab" || code == tea.KeyTab:
-		m.projectDetailButton = (m.projectDetailButton + 1) % 2
+		m.projectDetailButton = (m.projectDetailButton + 1) % m.projectDetailActionCount()
 		m.message = m.projectDetailButtonMessage()
 		return m, nil
 	case key == "left" || key == "up" || code == tea.KeyLeft || code == tea.KeyUp:
-		m.projectDetailButton = 0
+		m.projectDetailButton = wrapIndex(m.projectDetailButton-1, m.projectDetailActionCount())
 		m.message = m.projectDetailButtonMessage()
 		return m, nil
 	case key == "right" || key == "down" || code == tea.KeyRight || code == tea.KeyDown:
-		m.projectDetailButton = 1
+		m.projectDetailButton = wrapIndex(m.projectDetailButton+1, m.projectDetailActionCount())
 		m.message = m.projectDetailButtonMessage()
 		return m, nil
 	case isEnter:
+		project, ok := m.selectedProject()
+		if !ok {
+			return m, nil
+		}
+		if projectSupportsRouteCheck(project) {
+			switch m.projectDetailButton {
+			case 0:
+				if m.routeCheckLoading {
+					m.message = "Route check is already running"
+					return m, nil
+				}
+				m.routeCheckLoading = true
+				m.routeCheck = api.RouteCheckJob{ProjectID: project.ID, Status: "RUNNING"}
+				m.message = "Starting route check for " + project.Name + "..."
+				return m, m.startRouteCheckCmd(project.ID)
+			case 1:
+				return m.requestProjectDelete()
+			default:
+				return m.closeProjectDetail()
+			}
+		}
 		if m.projectDetailButton == 1 {
 			return m.closeProjectDetail()
 		}
@@ -1212,10 +1516,45 @@ func (m model) closeProjectDetail() (tea.Model, tea.Cmd) {
 }
 
 func (m model) projectDetailButtonMessage() string {
+	project, _ := m.selectedProject()
+	if projectSupportsRouteCheck(project) {
+		switch m.projectDetailButton {
+		case 0:
+			return "Route check selected"
+		case 1:
+			return "Delete selected"
+		default:
+			return "Cancel selected"
+		}
+	}
 	if m.projectDetailButton == 0 {
 		return "Delete selected"
 	}
 	return "Cancel selected"
+}
+
+func (m model) projectDetailActionCount() int {
+	project, _ := m.selectedProject()
+	if projectSupportsRouteCheck(project) {
+		return 3
+	}
+	return 2
+}
+
+func projectSupportsRouteCheck(project api.LiveProject) bool {
+	kind := strings.ToLower(strings.TrimSpace(firstNonEmpty(project.Kind, project.ArchitectureType)))
+	return (kind == "monolith" || kind == "monolithic") && strings.TrimSpace(project.DeployURL) != ""
+}
+
+func routeCheckStatusMessage(job api.RouteCheckJob) string {
+	switch strings.ToUpper(strings.TrimSpace(job.Status)) {
+	case "COMPLETED":
+		return fmt.Sprintf("Route check finished: %d passed, %d failed", job.Summary.Passed, job.Summary.Failed)
+	case "FAILED":
+		return "Route check failed: " + firstNonEmpty(job.ErrorMessage, "unknown error")
+	default:
+		return "Route check is running..."
+	}
 }
 
 func (m model) updateDeleteConfirmation(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1338,7 +1677,6 @@ func (f databaseDeployForm) clusterInput() (api.CreateClusterDeploymentInput, er
 		return api.CreateClusterDeploymentInput{}, err
 	}
 	return api.CreateClusterDeploymentInput{
-		Namespace:     "default",
 		ProjectName:   input.ProjectName,
 		Engine:        input.Engine,
 		DatabaseName:  input.DatabaseName,
@@ -1573,9 +1911,14 @@ func (m model) activateLogsSelection() (tea.Model, tea.Cmd) {
 }
 
 func (m model) openProjectDetail() (tea.Model, tea.Cmd) {
-	if _, ok := m.selectedProject(); !ok {
+	project, ok := m.selectedProject()
+	if !ok {
 		m.message = "No project selected"
 		return m, nil
+	}
+	if m.routeCheck.ProjectID != project.ID {
+		m.routeCheck = api.RouteCheckJob{}
+		m.routeCheckLoading = false
 	}
 	m.projectDetailOpen = true
 	m.projectDetailButton = 0
@@ -1682,6 +2025,12 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.deployLogOpen = false
 	m.deployLog = api.DatabaseDeploymentRecord{}
 	m.deployLogOffset = 0
+	m.deployLogFollow = false
+	m.certificatePathOpen = false
+	m.certificatePath = ""
+	m.clusterLogNamespace = ""
+	m.clusterLogRelease = ""
+	m.clusterLogTarget = ""
 	m.scannerImages = nil
 	m.scannerScans = nil
 	m.scannerCursor = 0
@@ -1748,6 +2097,144 @@ func (m model) fetchDatabaseDeploymentCmd(deploymentID string, delay time.Durati
 		}
 		return databaseDeploymentPollMsg{tokens: tokens, deployment: deployment, err: err}
 	}
+}
+
+func (m model) fetchClusterDeploymentStreamCmd(delay time.Duration) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	namespace := m.clusterLogNamespace
+	releaseName := m.clusterLogRelease
+	target := m.clusterLogTarget
+	clusterID := m.deployLog.ID
+	projectName := m.deployLog.ProjectName
+	return func() tea.Msg {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterDeploymentStreamMsg{
+					tokens: tokens, namespace: namespace, releaseName: releaseName, target: target, err: err,
+				}
+			}
+		}
+
+		deployment, statusErr := projectsAPI.ResolveClusterDeployment(ctx, tokens.AccessToken, namespace, clusterID, releaseName, projectName)
+		if api.IsUnauthorized(statusErr) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterDeploymentStreamMsg{
+					tokens: tokens, namespace: namespace, releaseName: releaseName, target: target, err: err,
+				}
+			}
+			deployment, statusErr = projectsAPI.ResolveClusterDeployment(ctx, tokens.AccessToken, namespace, clusterID, releaseName, projectName)
+		}
+		chunk, err := projectsAPI.FetchClusterDeploymentStreamChunk(ctx, tokens.AccessToken, namespace, releaseName, target)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err == nil {
+				chunk, err = projectsAPI.FetchClusterDeploymentStreamChunk(ctx, tokens.AccessToken, namespace, releaseName, target)
+			}
+		}
+		return clusterDeploymentStreamMsg{
+			tokens: tokens, namespace: namespace, releaseName: releaseName, target: target, deployment: deployment, chunk: chunk, err: err,
+		}
+	}
+}
+
+func (m model) downloadClusterCertificateCmd(destination string, overwrite bool) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	namespace := m.clusterLogNamespace
+	clusterID := m.deployLog.ID
+	projectName := firstNonEmpty(m.deployLog.ProjectName, m.deployLog.ReleaseName, "database")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return clusterCertificateDownloadMsg{tokens: tokens, err: err}
+			}
+		}
+		certificate, err := projectsAPI.DownloadClusterCertificate(ctx, tokens.AccessToken, namespace, clusterID)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err == nil {
+				certificate, err = projectsAPI.DownloadClusterCertificate(ctx, tokens.AccessToken, namespace, clusterID)
+			}
+		}
+		if err != nil {
+			return clusterCertificateDownloadMsg{tokens: tokens, err: err}
+		}
+
+		path, err := saveClusterCertificate(destination, projectName, certificate, overwrite)
+		return clusterCertificateDownloadMsg{tokens: tokens, path: path, err: err}
+	}
+}
+
+var unsafeFilenameCharacters = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func certificateFilename(projectName string, extension string) string {
+	baseName := strings.Trim(unsafeFilenameCharacters.ReplaceAllString(strings.TrimSpace(projectName), "-"), "-.")
+	if baseName == "" {
+		baseName = "database"
+	}
+	return baseName + "-ca" + extension
+}
+
+func saveClusterCertificate(destination string, projectName string, certificate api.ClusterCertificate, overwrite bool) (string, error) {
+	extension := strings.ToLower(filepath.Ext(certificate.Filename))
+	if extension != ".crt" && extension != ".pem" {
+		extension = ".crt"
+	}
+	path := strings.TrimSpace(destination)
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		path = filepath.Join(path, certificateFilename(projectName, extension))
+	} else if strings.HasSuffix(destination, string(os.PathSeparator)) {
+		path = filepath.Join(path, certificateFilename(projectName, extension))
+	}
+	if filepath.Ext(path) == "" {
+		path += extension
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if overwrite {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if os.IsExist(err) {
+		return "", fmt.Errorf("certificate file already exists: %s", path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("create certificate file: %w", err)
+	}
+	if _, err := file.Write(certificate.Content); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("write certificate file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close certificate file: %w", err)
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return path, nil
+	}
+	return absolutePath, nil
 }
 
 func (m model) deleteProjectCmd(project api.LiveProject) tea.Cmd {
@@ -2067,6 +2554,64 @@ func (m model) loadMonitoringCmd() tea.Cmd {
 			overview, err = observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
 		}
 		return monitoringLoadMsg{tokens: tokens, overview: overview, err: err}
+	}
+}
+
+func (m model) startRouteCheckCmd(projectID string) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return routeCheckStartMsg{tokens: tokens, err: err}
+			}
+		}
+		input := api.RouteCheckInput{MaxRoutes: 50, MaxDepth: 2, TimeoutMS: 10000}
+		job, err := projectsAPI.StartRouteCheck(ctx, tokens.AccessToken, projectID, input)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return routeCheckStartMsg{tokens: tokens, err: err}
+			}
+			job, err = projectsAPI.StartRouteCheck(ctx, tokens.AccessToken, projectID, input)
+		}
+		return routeCheckStartMsg{tokens: tokens, job: job, err: err}
+	}
+}
+
+func (m model) pollRouteCheckCmd(projectID, jobID string, delay time.Duration) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	return func() tea.Msg {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return routeCheckPollMsg{tokens: tokens, err: err}
+			}
+		}
+		job, err := projectsAPI.GetRouteCheck(ctx, tokens.AccessToken, projectID, jobID)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return routeCheckPollMsg{tokens: tokens, err: err}
+			}
+			job, err = projectsAPI.GetRouteCheck(ctx, tokens.AccessToken, projectID, jobID)
+		}
+		return routeCheckPollMsg{tokens: tokens, job: job, err: err}
 	}
 }
 

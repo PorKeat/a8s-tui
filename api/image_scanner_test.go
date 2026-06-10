@@ -120,6 +120,43 @@ func TestImageScannerGetScanReport(t *testing.T) {
 	}
 }
 
+func TestImageScannerCreateGitScan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["sourceKind"] != "git" ||
+			payload["repositoryUrl"] != "https://github.com/team/api.git" ||
+			payload["branchOrTag"] != "main" ||
+			payload["dockerfilePath"] != "Dockerfile" ||
+			payload["buildContext"] != "." ||
+			payload["targetImageName"] != "team-api" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		if payload["privateRepository"] != true || payload["username"] != "git-user" || payload["password"] != "token" {
+			t.Fatalf("private repository payload = %#v", payload)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(scanPayload("scan-git", "RUNNING"))
+	}))
+	defer server.Close()
+
+	client := NewImageScannerClient(server.URL)
+	client.client = server.Client()
+	_, err := client.CreateScan(context.Background(), "access", CreateImageScanInput{
+		SourceKind:        "git",
+		RepositoryURL:     "https://github.com/team/api.git",
+		TargetImageName:   "team-api",
+		PrivateRepository: true,
+		Username:          "git-user",
+		Password:          "token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func scanPayload(id, status string) map[string]any {
 	return map[string]any{
 		"id":              id,

@@ -433,11 +433,28 @@ func sanitizeLogLine(value string) string {
 func InferLogLevel(line string) string {
 	normalized := strings.ToLower(line)
 	switch {
-	case strings.Contains(normalized, "error"), strings.Contains(normalized, "exception"), strings.Contains(normalized, "failed"), strings.Contains(normalized, "fatal"):
+	case strings.Contains(normalized, "error"),
+		strings.Contains(normalized, "exception"),
+		strings.Contains(normalized, "failed"),
+		strings.Contains(normalized, "failure"),
+		strings.Contains(normalized, "fatal"),
+		strings.Contains(normalized, "unhealthy"),
+		strings.Contains(normalized, "denied"):
 		return "error"
-	case strings.Contains(normalized, "warn"), strings.Contains(normalized, "retry"), strings.Contains(normalized, "waiting"), strings.Contains(normalized, "back-off"):
+	case strings.Contains(normalized, "warn"),
+		strings.Contains(normalized, "retry"),
+		strings.Contains(normalized, "waiting"),
+		strings.Contains(normalized, "pending"),
+		strings.Contains(normalized, "back-off"):
 		return "warn"
-	case strings.Contains(normalized, "ready"), strings.Contains(normalized, "started"), strings.Contains(normalized, "listening"), strings.Contains(normalized, "success"), strings.Contains(normalized, "healthy"):
+	case strings.Contains(normalized, "ready"),
+		strings.Contains(normalized, "started"),
+		strings.Contains(normalized, "listening"),
+		strings.Contains(normalized, "success"),
+		strings.Contains(normalized, "succeeded"),
+		strings.Contains(normalized, "completed"),
+		strings.Contains(normalized, "deployed"),
+		strings.Contains(normalized, "healthy"):
 		return "success"
 	default:
 		return "info"

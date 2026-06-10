@@ -472,12 +472,62 @@ func (m model) modernProjectDetail(width, height int, actions bool) []string {
 	lines = append(lines, modernLine("", width, colorBgMain))
 	lines = append(lines, modernRule(width))
 	lines = append(lines, modernLine("", width, colorBgMain))
+	if projectSupportsRouteCheck(project) && (m.routeCheckLoading || m.routeCheck.ProjectID == project.ID) {
+		lines = append(lines, m.modernRouteCheckLines(width)...)
+		lines = append(lines, modernLine("", width, colorBgMain))
+		lines = append(lines, modernRule(width))
+		lines = append(lines, modernLine("", width, colorBgMain))
+	}
 	if actions && api.ProjectKindSupportsDelete(project.Kind) {
-		lines = append(lines, modernLine(modernActionButtons(m.projectDetailButton), width, colorBgMain))
+		lines = append(lines, modernLine(modernActionButtons(m.projectDetailButton, projectSupportsRouteCheck(project)), width, colorBgMain))
 	} else {
 		lines = append(lines, modernMutedLine("enter opens detail actions", width))
 	}
 	return modernCropLines(lines, width, height)
+}
+
+func (m model) modernRouteCheckLines(width int) []string {
+	job := m.routeCheck
+	if m.routeCheckLoading && job.JobID == "" {
+		return []string{
+			modernMutedLine("Route check", width),
+			modernLine(mainPrimaryStyle(colorBgMain).Render("● starting browser route check..."), width, colorBgMain),
+		}
+	}
+	status := firstNonEmpty(job.Status, "RUNNING")
+	lines := []string{
+		modernMutedLine("Route check", width),
+		modernLine(lipgloss.NewStyle().
+			Background(lipgloss.Color(colorBgMain)).
+			Foreground(lipgloss.Color(statusColor(status))).
+			Bold(true).
+			Render("● "+strings.ToLower(status)), width, colorBgMain),
+		modernFieldLine("Base URL", firstNonEmpty(job.BaseURL, "waiting for deployment URL"), width),
+		modernFieldLine("Summary", fmt.Sprintf("%d passed / %d failed / %d warnings", job.Summary.Passed, job.Summary.Failed, job.Summary.Warnings), width),
+	}
+	if job.ErrorMessage != "" {
+		lines = append(lines, modernFieldLine("Error", job.ErrorMessage, width))
+	}
+	for _, route := range job.Routes {
+		if len(lines) >= 9 {
+			break
+		}
+		state := "FAIL"
+		color := "#fb7185"
+		if route.BrowserOK {
+			state = "PASS"
+			color = "#4ade80"
+		} else if route.Warning {
+			state = "WARN"
+			color = "#facc15"
+		}
+		badge := lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(color)).Bold(true).Render(pad(state, 5))
+		meta := firstNonEmpty(route.Error, fmt.Sprintf("HTTP %d · %dms", route.HTTPStatus, route.DurationMS))
+		body := mainBodyStyle(colorBgMain).Render(" " + truncatePlain(firstNonEmpty(route.Path, "/"), max(width-visibleLen(badge)-visibleLen(meta)-3, 8)))
+		detail := mainMutedStyle(colorBgMain).Render(" " + truncatePlain(meta, max(width-visibleLen(badge)-visibleLen(body)-2, 8)))
+		lines = append(lines, modernLine(badge+body+detail, width, colorBgMain))
+	}
+	return lines
 }
 
 func (m model) modernDeploymentDetail(width, height int) []string {
@@ -608,10 +658,16 @@ func modernFieldLine(label, value string, width int) string {
 	return modernLine(content, width, colorBgMain)
 }
 
-func modernActionButtons(selected int) string {
-	deleteButton := modernButton("Delete", selected == 0, true)
-	cancelButton := modernButton("Cancel", selected == 1, false)
-	return deleteButton + mainBodyStyle(colorBgMain).Render("  ") + cancelButton
+func modernActionButtons(selected int, routeCheck bool) string {
+	separator := mainBodyStyle(colorBgMain).Render("  ")
+	if routeCheck {
+		return modernButton("Check routes", selected == 0, false) +
+			separator +
+			modernButton("Delete", selected == 1, true) +
+			separator +
+			modernButton("Cancel", selected == 2, false)
+	}
+	return modernButton("Delete", selected == 0, true) + separator + modernButton("Cancel", selected == 1, false)
 }
 
 func modernButton(label string, selected, danger bool) string {
