@@ -27,6 +27,7 @@ type LiveProject struct {
 	ProjectName           string
 	DatabaseName          string
 	DatabaseUsername      string
+	DatabasePassword      string
 	Namespace             string
 	DeploymentCount       int
 	DatabaseDeploymentIDs []string
@@ -141,6 +142,22 @@ type DatabaseDeploymentRecord struct {
 	Status                string
 	StatusMessage         string
 	StatusLog             string
+	DeployURL             string
+}
+
+type DatabaseDeploymentCredentialsRecord struct {
+	ReleaseName           string
+	Namespace             string
+	Engine                string
+	DatabaseName          string
+	Username              string
+	Password              string
+	ServiceName           string
+	ConnectionServiceName string
+	ServiceHost           string
+	ServicePort           int
+	ConnectionTLSEnabled  bool
+	AuthSecretName        string
 }
 
 type ClusterDeploymentRecord struct {
@@ -234,14 +251,33 @@ func (c ProjectClient) FetchLiveProjects(ctx context.Context, token string) ([]L
 func (c ProjectClient) hydrateLiveProjectConnectionDetails(ctx context.Context, token string, projects []LiveProject) []LiveProject {
 	for index := range projects {
 		project := projects[index]
-		if project.Kind != "database" || len(project.DatabaseDeploymentIDs) == 0 {
+		switch project.Kind {
+		case "database":
+			if len(project.DatabaseDeploymentIDs) == 0 {
+				continue
+			}
+			deploymentID := project.DatabaseDeploymentIDs[0]
+			deployment, err := c.FetchDatabaseDeployment(ctx, token, deploymentID)
+			if err != nil {
+				continue
+			}
+			project = mergeDatabaseDeploymentDetail(project, deployment)
+			if databaseDeploymentReady(project.Status) || databaseDeploymentReady(deployment.Status) {
+				if credentials, err := c.FetchDatabaseDeploymentCredentials(ctx, token, deploymentID); err == nil {
+					project = mergeDatabaseDeploymentCredentials(project, credentials)
+				}
+			}
+		case "dbcluster":
+			if !databaseDeploymentReady(project.Status) || project.Namespace == "" || project.ID == "" {
+				continue
+			}
+			if credentials, err := c.FetchClusterDeploymentCredentials(ctx, token, project.Namespace, project.ID); err == nil {
+				project = mergeDatabaseDeploymentCredentials(project, credentials)
+			}
+		default:
 			continue
 		}
-		deployment, err := c.FetchDatabaseDeployment(ctx, token, project.DatabaseDeploymentIDs[0])
-		if err != nil {
-			continue
-		}
-		projects[index] = mergeDatabaseDeploymentDetail(project, deployment)
+		projects[index] = project
 	}
 	return projects
 }
@@ -262,6 +298,22 @@ func mergeDatabaseDeploymentDetail(project LiveProject, deployment DatabaseDeplo
 	}
 	project.RequireSSL = deployment.RequireSSL
 	project.ConnectionTLSEnabled = deployment.ConnectionTLSEnabled
+	return project
+}
+
+func mergeDatabaseDeploymentCredentials(project LiveProject, credentials DatabaseDeploymentCredentialsRecord) LiveProject {
+	project.Engine = firstNonEmpty(credentials.Engine, project.Engine)
+	project.DatabaseName = firstNonEmpty(credentials.DatabaseName, project.DatabaseName)
+	project.DatabaseUsername = firstNonEmpty(credentials.Username, project.DatabaseUsername)
+	project.DatabasePassword = firstNonEmpty(credentials.Password, project.DatabasePassword)
+	project.Namespace = firstNonEmpty(credentials.Namespace, project.Namespace)
+	project.ServiceName = firstNonEmpty(credentials.ServiceName, project.ServiceName)
+	project.ConnectionServiceName = firstNonEmpty(credentials.ConnectionServiceName, project.ConnectionServiceName)
+	project.ServiceHost = firstNonEmpty(credentials.ServiceHost, project.ServiceHost)
+	if credentials.ServicePort > 0 {
+		project.ServicePort = credentials.ServicePort
+	}
+	project.ConnectionTLSEnabled = credentials.ConnectionTLSEnabled
 	return project
 }
 
@@ -722,6 +774,56 @@ func (c ProjectClient) FetchDatabaseDeployment(ctx context.Context, token, deplo
 	return normalizeDatabaseDeployment(payload), nil
 }
 
+func (c ProjectClient) FetchDatabaseDeploymentCredentials(ctx context.Context, token, deploymentID string) (DatabaseDeploymentCredentialsRecord, error) {
+	if strings.TrimSpace(deploymentID) == "" {
+		return DatabaseDeploymentCredentialsRecord{}, errors.New("database deployment id is required")
+	}
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/database-deployments", deploymentID, "credentials")
+	if err != nil {
+		return DatabaseDeploymentCredentialsRecord{}, err
+	}
+	return c.fetchDatabaseDeploymentCredentials(ctx, token, endpoint)
+}
+
+func (c ProjectClient) FetchClusterDeploymentCredentials(ctx context.Context, token, namespace, clusterID string) (DatabaseDeploymentCredentialsRecord, error) {
+	if strings.TrimSpace(namespace) == "" {
+		return DatabaseDeploymentCredentialsRecord{}, errors.New("cluster namespace is required")
+	}
+	if strings.TrimSpace(clusterID) == "" {
+		return DatabaseDeploymentCredentialsRecord{}, errors.New("cluster id is required")
+	}
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/cluster/namespaces", namespace, "clusters", clusterID, "console", "credentials")
+	if err != nil {
+		return DatabaseDeploymentCredentialsRecord{}, err
+	}
+	return c.fetchDatabaseDeploymentCredentials(ctx, token, endpoint)
+}
+
+func (c ProjectClient) fetchDatabaseDeploymentCredentials(ctx context.Context, token, endpoint string) (DatabaseDeploymentCredentialsRecord, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return DatabaseDeploymentCredentialsRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return DatabaseDeploymentCredentialsRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return DatabaseDeploymentCredentialsRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return DatabaseDeploymentCredentialsRecord{}, fmt.Errorf("decode database deployment credentials response: %w", err)
+	}
+	return normalizeDatabaseDeploymentCredentials(payload), nil
+}
+
 func (c ProjectClient) fetchBackendUserID(ctx context.Context, token string) (string, string, error) {
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/profile/me")
 	if err != nil {
@@ -875,6 +977,23 @@ func normalizeDatabaseDeployment(payload map[string]any) DatabaseDeploymentRecor
 		Status:                readString(payload["status"]),
 		StatusMessage:         readString(payload["statusMessage"]),
 		StatusLog:             readString(payload["statusLog"]),
+	}
+}
+
+func normalizeDatabaseDeploymentCredentials(payload map[string]any) DatabaseDeploymentCredentialsRecord {
+	return DatabaseDeploymentCredentialsRecord{
+		ReleaseName:           readString(payload["releaseName"]),
+		Namespace:             readString(payload["namespace"]),
+		Engine:                readString(payload["engine"]),
+		DatabaseName:          readString(payload["databaseName"]),
+		Username:              readString(payload["username"]),
+		Password:              readString(payload["password"]),
+		ServiceName:           readString(payload["serviceName"]),
+		ConnectionServiceName: readString(payload["connectionServiceName"]),
+		ServiceHost:           readString(payload["serviceHost"]),
+		ServicePort:           readInt(payload["servicePort"]),
+		ConnectionTLSEnabled:  readBool(payload["connectionTlsEnabled"]),
+		AuthSecretName:        readString(payload["authSecretName"]),
 	}
 }
 
@@ -1154,6 +1273,10 @@ func DatabaseDeploymentFailed(status string) bool {
 	default:
 		return false
 	}
+}
+
+func databaseDeploymentReady(status string) bool {
+	return DatabaseDeploymentTerminal(status) && !DatabaseDeploymentFailed(status)
 }
 
 func validKind(kind string) bool {

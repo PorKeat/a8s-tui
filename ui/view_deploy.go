@@ -502,9 +502,14 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 
 	lines := make([]string, 0, height)
 	lines = append(lines, "")
-	lines = append(lines, spaces(leftMargin)+bold+fgLogo+"Deploy Database"+reset+fgMuted+"  logs"+reset)
+	deployKind := "Database"
+	if deployment.DeploymentMode == "monolith" {
+		deployKind = "Monolithic"
+	}
+	lines = append(lines, spaces(leftMargin)+bold+fgLogo+"Deploy "+deployKind+reset+fgMuted+"  logs"+reset)
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Project "+reset+fgText+truncatePlain(title, contentWidth-18)+reset)
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Status  "+reset+deploymentStatusDisplay(m, status, statusColor)+deployStatusSuffix(deployment, contentWidth))
+	lines = append(lines, monolithicDeploymentURLLines(deployment, contentWidth, leftMargin)...)
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+paneTitle("view logs", contentWidth, true))
 
@@ -562,6 +567,27 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	view.AltScreen = true
 	view.WindowTitle = "A8S TUI - Deployment Logs"
 	return view
+}
+
+func monolithicDeploymentURLLines(deployment api.DatabaseDeploymentRecord, width, leftMargin int) []string {
+	if deployment.DeploymentMode != "monolith" ||
+		!api.DatabaseDeploymentTerminal(deployment.Status) ||
+		api.DatabaseDeploymentFailed(deployment.Status) ||
+		strings.TrimSpace(deployment.DeployURL) == "" {
+		return nil
+	}
+	label := "URL     "
+	valueWidth := max(width-len(label), 8)
+	parts := splitPlainWidth(deployment.DeployURL, valueWidth)
+	lines := make([]string, 0, len(parts))
+	for index, part := range parts {
+		currentLabel := label
+		if index > 0 {
+			currentLabel = strings.Repeat(" ", len(label))
+		}
+		lines = append(lines, spaces(leftMargin)+fgMuted+currentLabel+reset+fgGreen+part+reset)
+	}
+	return lines
 }
 
 func deploymentStatusDisplay(m model, status string, color string) string {

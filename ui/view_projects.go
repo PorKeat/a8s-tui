@@ -339,10 +339,11 @@ func projectConnectionCard(project api.LiveProject, width int) []string {
 	addRow("Port", port)
 	addRow("Database", firstNonEmpty(project.DatabaseName, project.Name))
 	addRow("Username", project.DatabaseUsername)
+	addRow("Password", project.DatabasePassword)
 	addRow("Engine", project.Engine)
 	addRow("Version", project.Version)
 	addRow("Namespace", project.Namespace)
-	addRow("JDBC URL", jdbcURL)
+	addRow("URL", jdbcURL)
 	if len(rows) == 0 {
 		addRow("Status", "No connection details yet.")
 	}
@@ -354,14 +355,39 @@ func projectConnectionCard(project api.LiveProject, width int) []string {
 	labelWidth := 11
 	valueWidth := max(width-labelWidth-6, 8)
 	for _, row := range rows {
-		content := body.Render("  ") +
-			muted.Render(pad(truncatePlain(row.label, labelWidth), labelWidth)) +
-			body.Render("  ") +
-			body.Render(truncatePlain(row.value, valueWidth))
-		lines = append(lines, card.Render(content))
+		values := []string{truncatePlain(row.value, valueWidth)}
+		if row.label == "URL" {
+			values = splitPlainWidth(row.value, valueWidth)
+		}
+		for index, value := range values {
+			label := row.label
+			if index > 0 {
+				label = ""
+			}
+			content := body.Render("  ") +
+				muted.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+				body.Render("  ") +
+				body.Render(value)
+			lines = append(lines, card.Render(content))
+		}
 	}
 	lines = append(lines, card.Render(""))
 	return repairCardLines(lines)
+}
+
+func splitPlainWidth(text string, width int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" || width <= 0 {
+		return nil
+	}
+	runes := []rune(text)
+	lines := make([]string, 0, (len(runes)+width-1)/width)
+	for len(runes) > 0 {
+		count := min(width, len(runes))
+		lines = append(lines, string(runes[:count]))
+		runes = runes[count:]
+	}
+	return lines
 }
 
 func projectConnectionHostname(project api.LiveProject) string {
@@ -405,8 +431,22 @@ func projectJDBCURL(project api.LiveProject) string {
 	case "oracle":
 		service := firstNonEmpty(project.ConnectionServiceName, project.ServiceName, database)
 		return fmt.Sprintf("jdbc:oracle:thin:@//%s:%s/%s", host, port, service)
+	case "redis":
+		scheme := "redis"
+		if tlsEnabled {
+			scheme = "rediss"
+		}
+		return fmt.Sprintf("%s://%s:%s/%s", scheme, host, port, database)
+	case "mongodb", "mongo":
+		return fmt.Sprintf("mongodb://%s:%s/%s?authSource=%s&tls=%t", host, port, database, database, tlsEnabled)
+	case "cassandra":
+		suffix := ""
+		if tlsEnabled {
+			suffix = "?sslenabled=true&verifyservercertificate=true"
+		}
+		return fmt.Sprintf("jdbc:cassandra://%s:%s/%s%s", host, port, database, suffix)
 	default:
-		return ""
+		return fmt.Sprintf("%s:%s", host, port)
 	}
 }
 

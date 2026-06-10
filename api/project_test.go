@@ -110,6 +110,18 @@ func TestFetchLiveProjectsHydratesDatabaseConnectionDetails(t *testing.T) {
 				"connectionTlsEnabled": true,
 				"status":               "DEPLOYED",
 			})
+		case "/api/v1/database-deployments/db-1/credentials":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"releaseName":          "orders",
+				"namespace":            "ns-orders",
+				"engine":               "postgresql",
+				"databaseName":         "ordersdb",
+				"username":             "orders_user",
+				"password":             "runtime-secret",
+				"serviceHost":          "db-orders.db.autonomous-istad.com",
+				"servicePort":          float64(5432),
+				"connectionTlsEnabled": true,
+			})
 		default:
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -129,8 +141,61 @@ func TestFetchLiveProjectsHydratesDatabaseConnectionDetails(t *testing.T) {
 	if project.ServiceHost != "db-orders.db.autonomous-istad.com" || project.ServicePort != 5432 {
 		t.Fatalf("connection details = %#v", project)
 	}
-	if project.DatabaseUsername != "orders_user" || !project.RequireSSL || !project.ConnectionTLSEnabled {
+	if project.DatabaseUsername != "orders_user" || project.DatabasePassword != "runtime-secret" || !project.RequireSSL || !project.ConnectionTLSEnabled {
 		t.Fatalf("database details = %#v", project)
+	}
+}
+
+func TestFetchLiveProjectsHydratesClusterConnectionDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/v1/profile/me":
+			_ = json.NewEncoder(w).Encode(map[string]any{"userId": "user-1"})
+		case "/api/v1/projects/live":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"kind":      "dbcluster",
+				"id":        "cluster-1",
+				"name":      "orders-ha",
+				"status":    "DEPLOYED",
+				"namespace": "ns-orders",
+				"createdAt": "2026-05-25T01:00:00Z",
+				"updatedAt": "2026-05-25T01:30:00Z",
+			}})
+		case "/api/v1/cluster/namespaces/ns-orders/clusters/cluster-1/console/credentials":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"namespace":            "ns-orders",
+				"engine":               "postgresql",
+				"databaseName":         "ordersdb",
+				"username":             "orders_user",
+				"password":             "cluster-secret",
+				"serviceHost":          "orders-ha.autonomous-istad.com",
+				"servicePort":          float64(15432),
+				"connectionTlsEnabled": true,
+			})
+		default:
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	projects, _, err := client.FetchLiveProjects(context.Background(), "access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("projects = %#v", projects)
+	}
+	project := projects[0]
+	if project.ServiceHost != "orders-ha.autonomous-istad.com" || project.ServicePort != 15432 {
+		t.Fatalf("connection details = %#v", project)
+	}
+	if project.DatabaseUsername != "orders_user" || project.DatabasePassword != "cluster-secret" || !project.ConnectionTLSEnabled {
+		t.Fatalf("cluster credentials = %#v", project)
 	}
 }
 

@@ -469,6 +469,28 @@ func (m model) modernProjectDetail(width, height int, actions bool) []string {
 		}
 		lines = append(lines, modernFieldLine(field.label, field.value, width))
 	}
+	if project.Kind == "database" || project.Kind == "dbcluster" {
+		connectionFields := []struct {
+			label string
+			value string
+		}{
+			{"Hostname", projectConnectionHostname(project)},
+			{"Port", projectConnectionPort(project)},
+			{"Database", firstNonEmpty(project.DatabaseName, project.Name)},
+			{"Username", project.DatabaseUsername},
+			{"Password", project.DatabasePassword},
+			{"URL", projectJDBCURL(project)},
+		}
+		for _, field := range connectionFields {
+			if field.value != "" {
+				if field.label == "URL" {
+					lines = append(lines, modernWrappedFieldLines(field.label, field.value, width)...)
+					continue
+				}
+				lines = append(lines, modernFieldLine(field.label, field.value, width))
+			}
+		}
+	}
 	lines = append(lines, modernLine("", width, colorBgMain))
 	lines = append(lines, modernRule(width))
 	lines = append(lines, modernLine("", width, colorBgMain))
@@ -656,6 +678,21 @@ func modernFieldLine(label, value string, width int) string {
 		mainBodyStyle(colorBgMain).Render("  ") +
 		valueStyle.Render(truncatePlain(value, valueWidth))
 	return modernLine(content, width, colorBgMain)
+}
+
+func modernWrappedFieldLines(label, value string, width int) []string {
+	labelWidth := min(18, max(width/3, 8))
+	valueWidth := max(width-labelWidth-2, 4)
+	values := splitPlainWidth(value, valueWidth)
+	lines := make([]string, 0, len(values))
+	for index, value := range values {
+		currentLabel := label
+		if index > 0 {
+			currentLabel = ""
+		}
+		lines = append(lines, modernFieldLine(currentLabel, value, width))
+	}
+	return lines
 }
 
 func modernActionButtons(selected int, routeCheck bool) string {

@@ -481,6 +481,63 @@ func TestProjectEnterOpensDetailAndEscCloses(t *testing.T) {
 	}
 }
 
+func TestSplitPlainWidthPreservesLongConnectionURL(t *testing.T) {
+	connectionURL := "jdbc:postgresql://mama.autonomous-istad.com:15432/mama?sslmode=require"
+	lines := splitPlainWidth(connectionURL, 20)
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped URL, got %#v", lines)
+	}
+	if got := strings.Join(lines, ""); got != connectionURL {
+		t.Fatalf("wrapped URL lost content: got %q want %q", got, connectionURL)
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 20 {
+			t.Fatalf("wrapped line is too wide: %q", line)
+		}
+	}
+}
+
+func TestMonolithicDeployResultOpensJenkinsLogs(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm.projectName = "web"
+
+	next, cmd := m.Update(monolithicDeployResultMsg{deployment: api.MonolithicDeploymentRecord{
+		ProjectID:      "project-1",
+		Name:           "web",
+		Status:         "CREATED",
+		DeployURL:      "https://web.autonomous-istad.com",
+		QueueItemID:    42,
+		JenkinsJobName: "deploy-monolith",
+	}})
+	m = next.(model)
+	if cmd == nil || !m.deployLogOpen || m.jenkinsLogQueue != 42 || m.jenkinsLogJob != "deploy-monolith" {
+		t.Fatalf("expected Jenkins log viewer, model=%#v cmd=%v", m, cmd)
+	}
+	if m.deployLog.DeploymentMode != "monolith" || m.deployLog.Status != "QUEUED" || m.deployLog.DeployURL != "https://web.autonomous-istad.com" {
+		t.Fatalf("deployment log = %#v", m.deployLog)
+	}
+
+	next, cmd = m.Update(jenkinsDeploymentStreamMsg{
+		queueID: 42,
+		chunk: api.JenkinsLogStreamChunk{
+			Lines:     []string{"Build complete"},
+			Status:    "DEPLOYED",
+			Message:   "Jenkins build completed: SUCCESS",
+			Completed: true,
+		},
+	})
+	m = next.(model)
+	if cmd != nil || m.deployLog.Status != "DEPLOYED" || !strings.Contains(m.deployLog.StatusLog, "Build complete") {
+		t.Fatalf("completed Jenkins log = %#v cmd=%v", m, cmd)
+	}
+	urlLines := monolithicDeploymentURLLines(m.deployLog, 24, 0)
+	if len(urlLines) < 2 || !strings.Contains(urlLines[0], "https://web") || !strings.Contains(urlLines[len(urlLines)-1], "com") {
+		t.Fatalf("expected full wrapped deployment URL, got %#v", urlLines)
+	}
+}
+
 func TestProjectDeleteConfirmationFlow(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
 	m.state = stateReady

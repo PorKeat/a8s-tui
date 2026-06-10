@@ -94,6 +94,8 @@ type model struct {
 	clusterLogNamespace  string
 	clusterLogRelease    string
 	clusterLogTarget     string
+	jenkinsLogJob        string
+	jenkinsLogQueue      int
 	scannerImages        []api.ImageScannerImage
 	scannerScans         []api.ImageScanJob
 	scannerCursor        int
@@ -178,6 +180,14 @@ type monolithicDeployResultMsg struct {
 	tokens     auth.TokenSet
 	deployment api.MonolithicDeploymentRecord
 	err        error
+}
+
+type jenkinsDeploymentStreamMsg struct {
+	tokens  auth.TokenSet
+	jobName string
+	queueID int
+	chunk   api.JenkinsLogStreamChunk
+	err     error
 }
 
 type microserviceDeployResultMsg struct {
@@ -523,13 +533,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		name := firstNonEmpty(msg.deployment.Name, m.monolithForm.projectName, "monolith")
 		m.monolithFormOpen = false
 		m.monolithForm = newMonolithicDeployForm()
-		m.state = stateLoading
+		m.deployLogOpen = true
+		m.deployLog = monolithicDeploymentLogRecord(msg.deployment)
+		m.deployLogFollow = true
+		m.followLatestDeploymentLog()
+		m.jenkinsLogJob = firstNonEmpty(msg.deployment.JenkinsJobName, "deploy-pipeline")
+		m.jenkinsLogQueue = msg.deployment.QueueItemID
+		m.state = stateReady
 		if msg.deployment.QueueItemID > 0 {
 			m.message = fmt.Sprintf("Monolithic deployment queued: %s (#%d)", name, msg.deployment.QueueItemID)
+			return m, m.fetchJenkinsDeploymentStreamCmd(0)
 		} else {
-			m.message = "Monolithic deployment queued: " + name
+			m.message = "Monolithic deployment accepted without Jenkins queue log context: " + name
 		}
-		return m, m.fetchProjectsCmd()
+		return m, nil
+	case jenkinsDeploymentStreamMsg:
+		if !m.deployLogOpen || m.jenkinsLogQueue <= 0 || msg.queueID != m.jenkinsLogQueue {
+			return m, nil
+		}
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.deployLog.StatusLog = appendUniqueDeploymentLogLines(m.deployLog.StatusLog, msg.chunk.Lines)
+		if msg.chunk.Status != "" {
+			m.deployLog.Status = msg.chunk.Status
+		}
+		if msg.chunk.Message != "" {
+			m.deployLog.StatusMessage = msg.chunk.Message
+		}
+		m.syncDeploymentLogOffset()
+		name := firstNonEmpty(m.deployLog.ProjectName, "monolith")
+		if msg.chunk.Completed {
+			if api.DatabaseDeploymentFailed(m.deployLog.Status) {
+				m.message = "Monolithic deployment failed: " + name
+			} else {
+				m.message = "Monolithic deployment finished: " + name
+			}
+			return m, nil
+		}
+		if msg.err != nil {
+			m.message = "Jenkins log stream paused: " + msg.err.Error()
+			return m, m.fetchJenkinsDeploymentStreamCmd(2 * time.Second)
+		}
+		m.message = "Monolithic deployment is still running..."
+		return m, m.fetchJenkinsDeploymentStreamCmd(500 * time.Millisecond)
 	case microserviceDeployResultMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -1359,10 +1406,16 @@ func (m model) updateDeploymentLog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clusterLogNamespace = ""
 		m.clusterLogRelease = ""
 		m.clusterLogTarget = ""
+		m.jenkinsLogJob = ""
+		m.jenkinsLogQueue = 0
 		m.state = stateLoading
 		m.message = "Refreshing live projects..."
 		return m, m.fetchProjectsCmd()
 	case key == "r":
+		if m.jenkinsLogQueue > 0 {
+			m.message = "Refreshing Jenkins deployment logs..."
+			return m, m.fetchJenkinsDeploymentStreamCmd(0)
+		}
 		if m.clusterLogNamespace != "" && m.clusterLogRelease != "" {
 			m.message = "Refreshing cluster deployment logs..."
 			return m, m.fetchClusterDeploymentStreamCmd(0)
@@ -2031,6 +2084,8 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.clusterLogNamespace = ""
 	m.clusterLogRelease = ""
 	m.clusterLogTarget = ""
+	m.jenkinsLogJob = ""
+	m.jenkinsLogQueue = 0
 	m.scannerImages = nil
 	m.scannerScans = nil
 	m.scannerCursor = 0
@@ -2145,6 +2200,57 @@ func (m model) fetchClusterDeploymentStreamCmd(delay time.Duration) tea.Cmd {
 		return clusterDeploymentStreamMsg{
 			tokens: tokens, namespace: namespace, releaseName: releaseName, target: target, deployment: deployment, chunk: chunk, err: err,
 		}
+	}
+}
+
+func (m model) fetchJenkinsDeploymentStreamCmd(delay time.Duration) tea.Cmd {
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	jobName := m.jenkinsLogJob
+	queueID := m.jenkinsLogQueue
+	return func() tea.Msg {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return jenkinsDeploymentStreamMsg{tokens: tokens, jobName: jobName, queueID: queueID, err: err}
+			}
+		}
+		chunk, err := projectsAPI.FetchJenkinsLogStreamChunk(ctx, tokens.AccessToken, jobName, queueID)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err == nil {
+				chunk, err = projectsAPI.FetchJenkinsLogStreamChunk(ctx, tokens.AccessToken, jobName, queueID)
+			}
+		}
+		return jenkinsDeploymentStreamMsg{tokens: tokens, jobName: jobName, queueID: queueID, chunk: chunk, err: err}
+	}
+}
+
+func monolithicDeploymentLogRecord(deployment api.MonolithicDeploymentRecord) api.DatabaseDeploymentRecord {
+	status := firstNonEmpty(deployment.Status, "QUEUED")
+	if !api.DatabaseDeploymentTerminal(status) {
+		status = "QUEUED"
+	}
+	initialLog := "Deployment request accepted."
+	if deployment.QueueItemID > 0 {
+		initialLog = fmt.Sprintf("Queued in Jenkins as item #%d.", deployment.QueueItemID)
+	}
+	return api.DatabaseDeploymentRecord{
+		ID:             deployment.ProjectID,
+		ProjectName:    deployment.Name,
+		DeploymentMode: "monolith",
+		Status:         status,
+		StatusMessage:  initialLog,
+		StatusLog:      initialLog,
+		DeployURL:      deployment.DeployURL,
 	}
 }
 
