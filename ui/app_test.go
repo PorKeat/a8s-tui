@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestModelMoveAndFilter(t *testing.T) {
@@ -471,6 +472,22 @@ func TestImageScannerTextFieldsAcceptJAndK(t *testing.T) {
 	m = next.(model)
 	if m.scannerForm.focus != 4 {
 		t.Fatalf("expected j to navigate from non-text field, focus=%d", m.scannerForm.focus)
+	}
+}
+
+func TestImageScannerFormUsesDeploymentStyleBoxesAndKeepsFocusVisible(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	applyTheme(m.themeIndex)
+	m.scannerMode = 1
+	m.scannerForm.externalPrivate = true
+	m.scannerForm.focus = m.imageScannerFormFieldCount() - 1
+
+	rendered := strings.Join(m.modernExternalScannerWorkspace(86, 22), "\n")
+	if !strings.Contains(rendered, "╭") || !strings.Contains(rendered, "╰") {
+		t.Fatalf("scanner form should use bordered deployment-style fields:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Pull & Scan") {
+		t.Fatalf("focused scanner action should stay visible:\n%s", rendered)
 	}
 }
 
@@ -1302,20 +1319,44 @@ func TestMicroserviceDetectedServicesStayVisibleAfterScan(t *testing.T) {
 	next, _ := m.Update(microserviceScanResultMsg{result: api.MicroserviceDetectionResult{
 		Repository: api.DetectedMicroserviceRepository{FullName: "team/platform", DefaultBranch: "main"},
 		Services: []api.DetectedMicroserviceService{
-			{Name: "config-server", RepoURL: "https://github.com/team/platform", AppPort: 8089},
-			{Name: "orders-service", RepoURL: "https://github.com/team/platform", AppPort: 8080},
+			{Name: "config-server", RepoURL: "https://github.com/team/platform", Framework: "springboot-gradle", AppPort: 8089},
+			{Name: "orders-service", RepoURL: "https://github.com/team/platform", Framework: "springboot-gradle", AppPort: 8080, ExposePublic: true},
 		},
 	}})
 	m = next.(model)
 	lines := m.renderDashboardMonolithicDeployForm(68, 20)
 	rendered := strings.Join(lines, "\n")
 	if !strings.Contains(rendered, "2 services detected") ||
-		!strings.Contains(rendered, "Detected services  2") ||
-		!strings.Contains(rendered, "config-server") {
+		!strings.Contains(rendered, "Detected services") ||
+		!strings.Contains(rendered, "config-server") ||
+		!strings.Contains(rendered, "1 public  /  1 internal") ||
+		!strings.Contains(rendered, ":8089") ||
+		!strings.Contains(rendered, "╭") {
 		t.Fatalf("detected services not visible after scan:\n%s", rendered)
 	}
 	if m.monolithForm.focus != 3 {
 		t.Fatalf("focus = %d, want scan result focus", m.monolithForm.focus)
+	}
+}
+
+func TestMicroserviceDeployFormNeverExceedsPaneWidth(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+	m.monolithForm.repoURL = "https://github.com/team/a-very-long-microservice-repository-name"
+	m.monolithForm.detectedServices = []api.CreateMicroserviceServiceInput{{
+		Name:         "a-very-long-service-name-that-needs-truncation",
+		Framework:    "springboot-gradle-with-a-long-runtime-name",
+		AppPort:      8080,
+		ExposePublic: true,
+	}}
+
+	const width = 58
+	for index, line := range monolithicDeployFormCard(m, width) {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("line %d width = %d, want <= %d:\n%s", index, got, width, line)
+		}
 	}
 }
 
@@ -1362,7 +1403,7 @@ func TestMicroserviceRelationshipEditorAddsAndRemovesDependency(t *testing.T) {
 		{Name: "orders-service", ServiceType: "backend"},
 		{Name: "config-server", ServiceType: "backend"},
 	}
-	m.monolithForm.focus = 5
+	m.monolithForm.focus = 7
 
 	next, cmd := m.updateMonolithicDeployForm(keyMsg("enter"))
 	m = next.(model)

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/PorKeat/a8s-tui/api"
@@ -256,10 +257,20 @@ func monolithicDeployFormCard(m model, width int) []string {
 		contextLabel = m.monolithForm.sourceModeLabel()
 		contextLine = "GitHub repository detection"
 	}
+	headerWidth := max(cardWidth-4, 8)
+	headerTitle := "Deploy " + m.monolithForm.title()
+	headerContextWidth := max(headerWidth-visibleLen(headerTitle)-2, 0)
+	headerContext := truncatePlain(contextLabel, headerContextWidth)
+	headerLine := "  " + title.Render(truncatePlain(headerTitle, headerWidth))
+	if headerContext != "" {
+		headerLine += bodyStyle.Render("  ") + mutedStyle.Render(headerContext)
+	}
+	helpLine := "  " + mutedStyle.Render(truncatePlain(monolithicDeployHelpText(m.monolithForm), headerWidth))
+	contextLine = truncatePlain(contextLine, headerWidth)
 	lines := []string{
 		cardContentLine(card, "", width),
-		cardContentLine(card, "  "+title.Render("Deploy "+m.monolithForm.title())+bodyStyle.Render("  ")+mutedStyle.Render(contextLabel), width),
-		cardContentLine(card, "  "+mutedStyle.Render(monolithicDeployHelpText(m.monolithForm)), width),
+		cardContentLine(card, headerLine, width),
+		cardContentLine(card, helpLine, width),
 		cardContentLine(card, "  "+mutedStyle.Render(contextLine), width),
 		cardContentLine(card, "", width),
 	}
@@ -288,7 +299,9 @@ func monolithicDeployFormCard(m model, width int) []string {
 			{2, "Branch", branchValue},
 			{3, "Scan repository", microserviceScanFieldValue(m.monolithForm)},
 			{4, "Project name", m.monolithForm.projectName},
-			{5, "Relationships", microserviceRelationshipSummary(m.monolithForm)},
+			{5, "Env service", microserviceEnvironmentTargetSummary(m.monolithForm)},
+			{6, ".env file", microserviceEnvironmentFileSummary(m.monolithForm)},
+			{7, "Relationships", microserviceRelationshipSummary(m.monolithForm)},
 		}
 	}
 	for _, field := range fields {
@@ -318,7 +331,7 @@ func monolithicDeployFormCard(m model, width int) []string {
 
 func monolithicDeployHelpText(form monolithicDeployForm) string {
 	if form.isMicroservices() {
-		return "Choose mono/multi repo, scan public GitHub remotes, review detected services, then deploy."
+		return "Scan repositories, import service env, review relationships, then deploy."
 	}
 	return "Vercel-style deploy from Git. Enter submits on Deploy."
 }
@@ -338,10 +351,13 @@ func microserviceScanFieldValue(form monolithicDeployForm) string {
 
 func microserviceDetectedServiceLineCount(form monolithicDeployForm) int {
 	if len(form.detectedServices) == 0 {
-		return 4
+		return 2
 	}
-	count := min(len(form.detectedServices), 8) + 3
+	count := min(len(form.detectedServices), 8)*3 + 1
 	if len(form.detectedServices) > 8 {
+		count++
+	}
+	if form.scanStatus != "" {
 		count++
 	}
 	return count
@@ -350,9 +366,18 @@ func microserviceDetectedServiceLineCount(form monolithicDeployForm) int {
 func microserviceDetectedServiceLines(card lipgloss.Style, cardWidth, width int, form monolithicDeployForm) []string {
 	title := mainTitleStyle(colorBgCard)
 	mutedStyle := mainMutedStyle(colorBgCard)
-	bodyStyle := mainBodyStyle(colorBgCard)
+	publicCount := 0
+	for _, service := range form.detectedServices {
+		if service.ExposePublic {
+			publicCount++
+		}
+	}
+	summary := fmt.Sprintf("%d services", len(form.detectedServices))
+	if len(form.detectedServices) > 0 {
+		summary = fmt.Sprintf("%d public  /  %d internal", publicCount, len(form.detectedServices)-publicCount)
+	}
 	lines := []string{
-		cardContentLine(card, "  "+title.Render(fmt.Sprintf("Detected services  %d", len(form.detectedServices))), width),
+		cardContentLine(card, "  "+title.Render("Detected services")+mutedStyle.Render("  "+summary), width),
 	}
 	if len(form.detectedServices) == 0 {
 		status := firstNonEmpty(form.scanStatus, "Scan a repository to discover deployable services.")
@@ -360,16 +385,58 @@ func microserviceDetectedServiceLines(card lipgloss.Style, cardWidth, width int,
 	}
 	limit := min(len(form.detectedServices), 8)
 	for _, service := range form.detectedServices[:limit] {
-		detail := joinNonEmpty(service.Framework, service.ServiceType, fmt.Sprintf(":%d", service.AppPort))
-		repository := firstNonEmpty(service.RepoFullName, service.RepoURL)
-		line := truncatePlain("  "+service.Name+"  "+detail+"  "+repository, cardWidth-4)
-		lines = append(lines, cardContentLine(card, bodyStyle.Render(line), width))
+		lines = append(lines, microserviceDetectedServiceBox(card, cardWidth, width, service)...)
 	}
 	if len(form.detectedServices) > limit {
 		lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(fmt.Sprintf("+ %d more services", len(form.detectedServices)-limit)), width))
 	}
 	if form.scanStatus != "" {
 		lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(form.scanStatus, cardWidth-4)), width))
+	}
+	return lines
+}
+
+func microserviceDetectedServiceBox(
+	card lipgloss.Style,
+	cardWidth, width int,
+	service api.CreateMicroserviceServiceInput,
+) []string {
+	rowBg := lipgloss.Color(colorBgCard)
+	boxWidth := max(cardWidth-4, 24)
+	nameWidth := max(min(boxWidth/3, 28), 12)
+	detailWidth := max(boxWidth-nameWidth-7, 8)
+	access := "internal"
+	accessStyle := mainMutedStyle(colorBgCard)
+	if service.ExposePublic {
+		access = "public"
+		accessStyle = mainPrimaryStyle(colorBgCard)
+	}
+	if service.PrimaryPublic {
+		access = "primary"
+	}
+	runtime := firstNonEmpty(service.Framework, service.ServiceType, "detected")
+	detail := fmt.Sprintf(":%d  %d env", service.AppPort, len(service.Env))
+	if detailWidth >= 38 {
+		detail = fmt.Sprintf("%s  %s", runtime, detail)
+	}
+	content := mainTitleStyle(colorBgCard).Render(pad(truncatePlain(service.Name, nameWidth), nameWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		mainMutedStyle(colorBgCard).Render(truncatePlain(detail, max(detailWidth-len(access)-1, 4))) +
+		mainBodyStyle(colorBgCard).Render(" ") +
+		accessStyle.Render(access)
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colorBorder)).
+		BorderBackground(rowBg).
+		Render(content)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
 	}
 	return lines
 }
@@ -386,6 +453,25 @@ func microserviceRelationshipSummary(form monolithicDeployForm) string {
 		return "Manage service dependencies"
 	}
 	return fmt.Sprintf("Manage %d service dependencies", relationships)
+}
+
+func microserviceEnvironmentTargetSummary(form monolithicDeployForm) string {
+	if len(form.detectedServices) == 0 {
+		return "Scan a repository first"
+	}
+	target := form.detectedServices[clamp(form.envTarget, 0, len(form.detectedServices)-1)]
+	if len(target.Env) == 0 {
+		return target.Name + "  /  no variables"
+	}
+	return fmt.Sprintf("%s  /  %d variables", target.Name, len(target.Env))
+}
+
+func microserviceEnvironmentFileSummary(form monolithicDeployForm) string {
+	path := strings.TrimSpace(form.envFilePath)
+	if path == "" {
+		return "Press enter to browse and import"
+	}
+	return filepath.Base(path) + "  /  press enter to replace"
 }
 
 func microserviceRelationshipEditorCard(m model, width int) []string {

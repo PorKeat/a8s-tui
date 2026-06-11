@@ -83,13 +83,20 @@ func (c ProjectClient) DetectMicroserviceRepository(
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		if res.StatusCode == http.StatusForbidden ||
-			res.StatusCode == http.StatusNotFound {
+		message := decodeErrorMessage(res)
+		if res.StatusCode == http.StatusForbidden {
 			return MicroserviceDetectionResult{}, fmt.Errorf(
-				"public GitHub repository is unavailable; verify the URL, branch, and repository visibility",
+				"GitHub rejected the public repository scan: %s; unauthenticated public scans may be rate-limited",
+				firstNonEmpty(message, "forbidden"),
 			)
 		}
-		return MicroserviceDetectionResult{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+		if res.StatusCode == http.StatusNotFound {
+			return MicroserviceDetectionResult{}, fmt.Errorf(
+				"public GitHub repository or branch was not found: %s",
+				firstNonEmpty(message, "verify the URL and branch"),
+			)
+		}
+		return MicroserviceDetectionResult{}, httpStatusError{status: res.StatusCode, message: message}
 	}
 
 	var result MicroserviceDetectionResult

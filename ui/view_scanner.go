@@ -122,7 +122,7 @@ func (m model) modernExternalScannerWorkspace(width, height int) []string {
 		modernLine("", width, colorBgMain),
 		modernMutedLine("Use registry hosts such as docker.io or ghcr.io, not image web pages.", width),
 	)
-	return modernCropLines(lines, width, height)
+	return modernScannerWorkspaceLines(lines, width, height, m.scannerForm.focus)
 }
 
 func (m model) modernGitScannerWorkspace(width, height int) []string {
@@ -146,7 +146,7 @@ func (m model) modernGitScannerWorkspace(width, height int) []string {
 		modernLine("", width, colorBgMain),
 		modernMutedLine("Clones, builds, and scans the resulting image.", width),
 	)
-	return modernCropLines(lines, width, height)
+	return modernScannerWorkspaceLines(lines, width, height, m.scannerForm.focus)
 }
 
 func (m model) modernScannerHistoryWorkspace(width, height int) []string {
@@ -184,24 +184,37 @@ func (m model) modernScannerHistoryWorkspace(width, height int) []string {
 	return modernCropLines(lines, width, height)
 }
 
+func modernScannerWorkspaceLines(lines []string, width, height, focus int) []string {
+	const fixedHeaderLines = 5
+	if len(lines) <= height || len(lines) <= fixedHeaderLines {
+		return modernCropLines(lines, width, height)
+	}
+	header := append([]string(nil), lines[:fixedHeaderLines]...)
+	body := lines[fixedHeaderLines:]
+	available := max(height-fixedHeaderLines, 1)
+	focusLine := 3 + max(focus, 0)*3
+	offset := clamp(focusLine-available/2, 0, max(len(body)-available, 0))
+	visible := append(header, body[offset:min(offset+available, len(body))]...)
+	return modernCropLines(visible, width, height)
+}
+
 func (m model) modernExternalScannerForm(width int) []string {
 	form := m.scannerForm
 	lines := []string{
 		modernHeading("External image", width),
 		modernMutedLine("Enter a registry host and image path. Credentials stay in memory.", width),
 		modernLine("", width, colorBgMain),
-		modernScannerFormField("Registry URL", form.externalRegistry, "docker.io (not hub.docker.com image page)", width, form.focus == 0, false),
-		modernScannerFormField("Image name", form.externalName, "library/nginx", width, form.focus == 1, false),
-		modernScannerFormField("Image tag", form.externalTag, "latest", width, form.focus == 2, false),
-		modernScannerFormChoice("Private registry", form.externalPrivate, width, form.focus == 3),
 	}
+	lines = append(lines, modernScannerFormField("Registry URL", form.externalRegistry, "docker.io (not hub.docker.com image page)", width, form.focus == 0, false)...)
+	lines = append(lines, modernScannerFormField("Image name", form.externalName, "library/nginx", width, form.focus == 1, false)...)
+	lines = append(lines, modernScannerFormField("Image tag", form.externalTag, "latest", width, form.focus == 2, false)...)
+	lines = append(lines, modernScannerFormChoice("Private registry", form.externalPrivate, width, form.focus == 3)...)
 	if form.externalPrivate {
-		lines = append(lines,
-			modernScannerFormField("Username", form.externalUsername, "registry user", width, form.focus == 4, false),
-			modernScannerFormField("Password", form.externalPassword, "required", width, form.focus == 5, true),
-		)
+		lines = append(lines, modernScannerFormField("Username", form.externalUsername, "registry user", width, form.focus == 4, false)...)
+		lines = append(lines, modernScannerFormField("Password", form.externalPassword, "required", width, form.focus == 5, true)...)
 	}
-	lines = append(lines, modernScannerFormAction("Pull & Scan", width, form.focus == m.imageScannerFormFieldCount()-1))
+	lines = append(lines, modernLine("", width, colorBgMain))
+	lines = append(lines, modernScannerFormAction("Pull & Scan", width, form.focus == m.imageScannerFormFieldCount()-1)...)
 	return lines
 }
 
@@ -211,42 +224,64 @@ func (m model) modernGitScannerForm(width int) []string {
 		modernHeading("Git build", width),
 		modernMutedLine("Enter a repository URL. A8S builds main/Dockerfile, then scans it.", width),
 		modernLine("", width, colorBgMain),
-		modernScannerFormField("Repository URL", form.gitRepository, "https://github.com/user/repository.git", width, form.focus == 0, false),
-		modernScannerFormChoice("Private repository", form.gitPrivate, width, form.focus == 1),
 	}
+	lines = append(lines, modernScannerFormField("Repository URL", form.gitRepository, "https://github.com/user/repository.git", width, form.focus == 0, false)...)
+	lines = append(lines, modernScannerFormChoice("Private repository", form.gitPrivate, width, form.focus == 1)...)
 	if form.gitPrivate {
-		lines = append(lines,
-			modernScannerFormField("Username", form.gitUsername, "Git user", width, form.focus == 2, false),
-			modernScannerFormField("Token", form.gitPassword, "required", width, form.focus == 3, true),
-		)
+		lines = append(lines, modernScannerFormField("Username", form.gitUsername, "Git user", width, form.focus == 2, false)...)
+		lines = append(lines, modernScannerFormField("Token", form.gitPassword, "required", width, form.focus == 3, true)...)
 	}
-	lines = append(lines, modernScannerFormAction("Build & Scan", width, form.focus == m.imageScannerFormFieldCount()-1))
+	lines = append(lines, modernLine("", width, colorBgMain))
+	lines = append(lines, modernScannerFormAction("Build & Scan", width, form.focus == m.imageScannerFormFieldCount()-1)...)
 	return lines
 }
 
-func modernScannerFormField(label, value, placeholder string, width int, active, secret bool) string {
-	rowBg := colorBgPill
+func modernScannerFormField(label, value, placeholder string, width int, active, secret bool) []string {
+	rowBg := colorBgMain
+	border := colorBorder
+	labelStyle := mainMutedStyle(rowBg)
+	valueStyle := mainBodyStyle(rowBg)
+	prefixStyle := mainBodyStyle(rowBg)
+	prefix := "  "
 	if active {
-		rowBg = colorBgActive
+		border = colorPrimary
+		labelStyle = mainPrimaryStyle(rowBg)
+		valueStyle = mainTitleStyle(rowBg)
+		prefixStyle = mainPrimaryStyle(rowBg)
+		prefix = "> "
 	}
 	display := strings.TrimSpace(value)
-	valueStyle := mainBodyStyle(rowBg)
 	if display == "" {
 		display = placeholder
 		valueStyle = mainMutedStyle(rowBg)
 	} else if secret {
 		display = strings.Repeat("•", len([]rune(display)))
 	}
-	labelText := mainMutedStyle(rowBg).Render(pad(label, min(18, max(width/3, 10))))
-	prefix := "  "
-	if active {
-		prefix = "> "
+	boxWidth := max(width-4, 24)
+	labelWidth := min(18, max(boxWidth/3, 12))
+	valueWidth := max(boxWidth-labelWidth-8, 8)
+	content := prefixStyle.Render(prefix) +
+		labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+		mainBodyStyle(rowBg).Render("  ") +
+		valueStyle.Render(truncatePlain(display, valueWidth))
+	box := lipgloss.NewStyle().
+		Background(lipgloss.Color(rowBg)).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(border)).
+		BorderBackground(lipgloss.Color(rowBg)).
+		Render(content)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, modernLine("  "+line, width, colorBgMain))
 	}
-	content := mainPrimaryStyle(rowBg).Render(prefix) + labelText + valueStyle.Render(truncatePlain(display, max(width-visibleLen(labelText)-6, 8)))
-	return lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(pad(content, width))
+	return lines
 }
 
-func modernScannerFormChoice(label string, enabled bool, width int, active bool) string {
+func modernScannerFormChoice(label string, enabled bool, width int, active bool) []string {
 	value := "public"
 	if enabled {
 		value = "private"
@@ -254,16 +289,28 @@ func modernScannerFormChoice(label string, enabled bool, width int, active bool)
 	return modernScannerFormField(label, value, "", width, active, false)
 }
 
-func modernScannerFormAction(label string, width int, active bool) string {
-	rowBg := colorBgPill
+func modernScannerFormAction(label string, width int, active bool) []string {
+	rowBg := colorBgMain
+	border := colorBorder
 	style := mainBodyStyle(rowBg)
-	prefix := "  "
 	if active {
-		rowBg = colorPrimary
-		style = lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Foreground(lipgloss.Color(colorOnPrimary)).Bold(true)
-		prefix = "> "
+		border = colorPrimary
+		style = mainPrimaryStyle(rowBg)
 	}
-	return lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(pad(style.Render(prefix+label), width))
+	box := lipgloss.NewStyle().
+		Background(lipgloss.Color(rowBg)).
+		Foreground(lipgloss.Color(colorText)).
+		Padding(0, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(border)).
+		BorderBackground(lipgloss.Color(rowBg)).
+		Render(style.Render(label))
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, modernLine("  "+line, width, colorBgMain))
+	}
+	return lines
 }
 
 func scannerAccessLabel(private bool) string {

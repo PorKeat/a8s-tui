@@ -178,6 +178,11 @@ type certificatePathChoiceMsg struct {
 	err  error
 }
 
+type environmentFileChoiceMsg struct {
+	path string
+	err  error
+}
+
 type monolithicDeployResultMsg struct {
 	tokens     auth.TokenSet
 	deployment api.MonolithicDeploymentRecord
@@ -291,6 +296,8 @@ type monolithicDeployForm struct {
 	scanStatus          string
 	scannedRepositories []string
 	detectedServices    []api.CreateMicroserviceServiceInput
+	envTarget           int
+	envFilePath         string
 	relationshipOpen    bool
 	relationshipFocus   int
 	relationshipSource  int
@@ -886,6 +893,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.message = "Downloading SSL certificate..."
 		return m, m.downloadClusterCertificateCmd(msg.path, true)
+	case environmentFileChoiceMsg:
+		switch {
+		case errors.Is(msg.err, errNativeSaveDialogCancelled):
+			m.message = "Environment import cancelled"
+			return m, nil
+		case errors.Is(msg.err, errNativeSaveDialogUnavailable):
+			m.message = "Native file browser is unavailable on this system"
+			return m, nil
+		case msg.err != nil:
+			m.message = "Could not open environment file browser: " + msg.err.Error()
+			return m, nil
+		}
+		return m.importMicroserviceEnvFile(msg.path)
 	case monolithicDeployResultMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -994,6 +1014,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.monolithForm.ensureRelationshipTarget()
 		m.monolithForm.clampRelationshipCurrent()
+		m.monolithForm.clampEnvironmentTarget()
 		repositoryName := firstNonEmpty(msg.result.Repository.FullName, m.monolithForm.repoFullName, m.monolithForm.repoURL)
 		m.monolithForm.scannedRepositories = appendUniqueText(m.monolithForm.scannedRepositories, repositoryName)
 		if branch := strings.TrimSpace(msg.result.Repository.DefaultBranch); branch != "" &&
@@ -1474,6 +1495,9 @@ func (m model) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	case m.monolithFormOpen:
 		if m.monolithForm.relationshipOpen && m.monolithForm.relationshipFocus == 3 {
 			m.monolithForm.relationshipCustom += text
+		} else if m.monolithForm.isMicroservices() && m.monolithForm.focus == 6 {
+			m.message = "Press enter to browse for an environment file"
+			return m, nil
 		} else {
 			m.appendMonolithicFormText(text)
 		}
@@ -1574,9 +1598,10 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 	case key == "esc" || code == tea.KeyEscape:
 		m.monolithFormOpen = false
 		m.message = m.monolithForm.title() + " deployment canceled"
-	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown || key == "j":
+	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown ||
+		(key == "j" && !m.monolithForm.acceptsTextInput()):
 		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
-	case code == tea.KeyUp || key == "k":
+	case code == tea.KeyUp || (key == "k" && !m.monolithForm.acceptsTextInput()):
 		m.monolithForm.focus = (m.monolithForm.focus + fieldCount - 1) % fieldCount
 	case (code == tea.KeyLeft || code == tea.KeyRight) && m.monolithForm.isMicroservices() && m.monolithForm.focus == 0:
 		delta := -1
@@ -1589,15 +1614,33 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 			m.monolithForm.detectedServices = nil
 			m.monolithForm.scannedRepositories = nil
 			m.monolithForm.scanStatus = ""
+			m.monolithForm.envTarget = 0
+			m.monolithForm.envFilePath = ""
 			m.message = "Source mode changed. Scan repository sources again."
 		}
+	case (code == tea.KeyLeft || code == tea.KeyRight) && m.monolithForm.isMicroservices() && m.monolithForm.focus == 5:
+		if len(m.monolithForm.detectedServices) == 0 {
+			m.message = "Scan a repository before choosing an environment target"
+			return m, nil
+		}
+		delta := -1
+		if code == tea.KeyRight {
+			delta = 1
+		}
+		m.monolithForm.envTarget = wrapIndex(m.monolithForm.envTarget+delta, len(m.monolithForm.detectedServices))
+		m.monolithForm.envFilePath = ""
+		m.message = "Environment target: " + m.monolithForm.detectedServices[m.monolithForm.envTarget].Name
 	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
 		m.deleteMonolithicFormRune()
 	case isEnter:
 		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 3 {
 			return m.scanMicroserviceRepository()
 		}
-		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 5 {
+		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 6 {
+			m.message = "Opening environment file browser..."
+			return m, chooseEnvironmentFileCmd(m.monolithForm.defaultEnvironmentDirectory())
+		}
+		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 7 {
 			return m.openMicroserviceRelationshipEditor()
 		}
 		if m.monolithForm.focus == submitIndex {
@@ -1612,6 +1655,25 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 			m.appendMonolithicFormText(key)
 		}
 	}
+	return m, nil
+}
+
+func (m model) importMicroserviceEnvFile(path string) (tea.Model, tea.Cmd) {
+	form := &m.monolithForm
+	if len(form.detectedServices) == 0 {
+		m.message = "Scan a repository before importing an environment file"
+		return m, nil
+	}
+	envVars, resolvedPath, err := loadDotEnvFile(path)
+	if err != nil {
+		m.message = "Environment import failed: " + err.Error()
+		return m, nil
+	}
+	form.envTarget = clamp(form.envTarget, 0, len(form.detectedServices)-1)
+	target := &form.detectedServices[form.envTarget]
+	target.Env = mergeMicroserviceEnv(target.Env, envVars)
+	form.envFilePath = resolvedPath
+	m.message = fmt.Sprintf("Imported %d environment variable(s) into %s", len(envVars), target.Name)
 	return m, nil
 }
 
@@ -1642,9 +1704,10 @@ func (m model) updateMicroserviceRelationshipEditor(msg tea.KeyPressMsg) (tea.Mo
 	case key == "esc" || code == tea.KeyEscape:
 		m.monolithForm.relationshipOpen = false
 		m.message = "Relationship changes kept"
-	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown || key == "j":
+	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown ||
+		(key == "j" && m.monolithForm.relationshipFocus != 3):
 		m.monolithForm.relationshipFocus = (m.monolithForm.relationshipFocus + 1) % fieldCount
-	case code == tea.KeyUp || key == "k":
+	case code == tea.KeyUp || (key == "k" && m.monolithForm.relationshipFocus != 3):
 		m.monolithForm.relationshipFocus = (m.monolithForm.relationshipFocus + fieldCount - 1) % fieldCount
 	case code == tea.KeyLeft:
 		m.adjustMicroserviceRelationshipChoice(-1)
@@ -2549,9 +2612,34 @@ func (f monolithicDeployForm) title() string {
 
 func (f monolithicDeployForm) fieldCount() int {
 	if f.isMicroservices() {
-		return 7
+		return 9
 	}
 	return 5
+}
+
+func (f monolithicDeployForm) acceptsTextInput() bool {
+	if f.isMicroservices() {
+		return f.focus == 1 || f.focus == 2 || f.focus == 4
+	}
+	return f.focus >= 0 && f.focus < f.fieldCount()-1
+}
+
+func (f monolithicDeployForm) defaultEnvironmentDirectory() string {
+	if path := strings.TrimSpace(f.envFilePath); path != "" {
+		return path
+	}
+	if directory := strings.TrimSpace(f.directory); directory != "" {
+		return directory
+	}
+	return "."
+}
+
+func (f *monolithicDeployForm) clampEnvironmentTarget() {
+	if len(f.detectedServices) == 0 {
+		f.envTarget = 0
+		return
+	}
+	f.envTarget = clamp(f.envTarget, 0, len(f.detectedServices)-1)
 }
 
 func (f *monolithicDeployForm) ensureRelationshipTarget() {

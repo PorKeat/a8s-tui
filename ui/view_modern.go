@@ -86,7 +86,7 @@ func (m model) modernLeftPane(width, height int) string {
 }
 
 func (m model) modernRightPane(width, height int) string {
-	contentWidth := modernPaneInnerWidth(width)
+	contentWidth := modernDetailPaneInnerWidth(width)
 	contentHeight := modernPaneInnerHeight(height)
 	active := m.projectDetailOpen || m.dbFormOpen || m.monolithFormOpen || (m.focus == focusList && m.page != pageProjects)
 	if m.page == pageImageScanner {
@@ -95,27 +95,27 @@ func (m model) modernRightPane(width, height int) string {
 
 	switch {
 	case m.dbFormOpen:
-		return modernPane(width, height, active, modernCropLines(m.renderDashboardDatabaseDeployForm(contentWidth, contentHeight), contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, modernCropLines(m.renderDashboardDatabaseDeployForm(contentWidth, contentHeight), contentWidth, contentHeight))
 	case m.monolithFormOpen:
-		return modernPane(width, height, active, modernCropLines(m.renderDashboardMonolithicDeployForm(contentWidth, contentHeight), contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, modernCropLines(m.renderDashboardMonolithicDeployForm(contentWidth, contentHeight), contentWidth, contentHeight))
 	case m.deleteConfirmOpen:
-		return modernPane(width, height, true, modernCropLines(m.renderProjectDeleteConfirmation(contentWidth, contentHeight), contentWidth, contentHeight))
+		return modernDetailPane(width, height, true, modernCropLines(m.renderProjectDeleteConfirmation(contentWidth, contentHeight), contentWidth, contentHeight))
 	case m.projectDetailOpen:
-		return modernPane(width, height, true, m.modernProjectDetail(contentWidth, contentHeight, true))
+		return modernDetailPane(width, height, true, m.modernProjectDetail(contentWidth, contentHeight, true))
 	case m.page == pageProjects && m.focus == focusList:
-		return modernPane(width, height, false, m.modernProjectDetail(contentWidth, contentHeight, false))
+		return modernDetailPane(width, height, false, m.modernProjectDetail(contentWidth, contentHeight, false))
 	case m.page == pageDeployment && m.focus != focusSidebar:
-		return modernPane(width, height, active, m.modernDeploymentDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernDeploymentDetail(contentWidth, contentHeight))
 	case m.page == pageImageScanner && m.focus != focusSidebar:
-		return modernPane(width, height, active, m.modernImageScannerDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernImageScannerDetail(contentWidth, contentHeight))
 	case m.page == pageLogs && m.focus != focusSidebar:
-		return modernPane(width, height, active, m.modernLogsDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernLogsDetail(contentWidth, contentHeight))
 	case m.page == pageMonitoring && m.focus != focusSidebar:
-		return modernPane(width, height, active, m.modernMonitoringDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernMonitoringDetail(contentWidth, contentHeight))
 	case m.page == pageUserSettings && m.focus != focusSidebar:
-		return modernPane(width, height, active, m.modernUserSettingsDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernUserSettingsDetail(contentWidth, contentHeight))
 	default:
-		return modernPane(width, height, active, m.modernSectionDetail(contentWidth, contentHeight))
+		return modernDetailPane(width, height, active, m.modernSectionDetail(contentWidth, contentHeight))
 	}
 }
 
@@ -239,9 +239,17 @@ func modernKeyChip(key, label string) string {
 }
 
 func modernPane(width, height int, active bool, lines []string) string {
+	return modernStyledPane(width, height, active, modernPaneHorizontalPadding, lines)
+}
+
+func modernDetailPane(width, height int, active bool, lines []string) string {
+	return modernStyledPane(width, height, active, modernPaneHorizontalPadding+1, lines)
+}
+
+func modernStyledPane(width, height int, active bool, horizontalPadding int, lines []string) string {
 	contentWidth := max(width-2, 1)
 	contentHeight := max(height-2, 1)
-	lines = modernPaddedPaneLines(lines, contentWidth, contentHeight)
+	lines = modernPaddedPaneLinesWithPadding(lines, contentWidth, contentHeight, horizontalPadding)
 	border := colorBorder
 	if active {
 		border = colorPrimary
@@ -262,12 +270,20 @@ func modernPaneInnerWidth(width int) int {
 	return max(width-2-(modernPaneHorizontalPadding*2), 1)
 }
 
+func modernDetailPaneInnerWidth(width int) int {
+	return max(width-2-((modernPaneHorizontalPadding+1)*2), 1)
+}
+
 func modernPaneInnerHeight(height int) int {
 	return max(height-2-(modernPaneVerticalPadding*2), 1)
 }
 
 func modernPaddedPaneLines(lines []string, contentWidth, contentHeight int) []string {
-	innerWidth := max(contentWidth-(modernPaneHorizontalPadding*2), 1)
+	return modernPaddedPaneLinesWithPadding(lines, contentWidth, contentHeight, modernPaneHorizontalPadding)
+}
+
+func modernPaddedPaneLinesWithPadding(lines []string, contentWidth, contentHeight, horizontalPadding int) []string {
+	innerWidth := max(contentWidth-(horizontalPadding*2), 1)
 	innerHeight := max(contentHeight-(modernPaneVerticalPadding*2), 1)
 	lines = modernCropLines(lines, innerWidth, innerHeight)
 	out := make([]string, 0, contentHeight)
@@ -279,7 +295,7 @@ func modernPaddedPaneLines(lines []string, contentWidth, contentHeight int) []st
 		if len(out) >= contentHeight-modernPaneVerticalPadding {
 			break
 		}
-		out = append(out, modernPaddedPaneLine(line, contentWidth))
+		out = append(out, modernPaddedPaneLineWithPadding(line, contentWidth, horizontalPadding))
 	}
 	for len(out) < contentHeight {
 		out = append(out, blank)
@@ -288,8 +304,12 @@ func modernPaddedPaneLines(lines []string, contentWidth, contentHeight int) []st
 }
 
 func modernPaddedPaneLine(line string, contentWidth int) string {
-	left := backgroundLine("", modernPaneHorizontalPadding, bgDark)
-	rightWidth := max(contentWidth-modernPaneHorizontalPadding-visibleLen(line), 0)
+	return modernPaddedPaneLineWithPadding(line, contentWidth, modernPaneHorizontalPadding)
+}
+
+func modernPaddedPaneLineWithPadding(line string, contentWidth, horizontalPadding int) string {
+	left := backgroundLine("", horizontalPadding, bgDark)
+	rightWidth := max(contentWidth-horizontalPadding-visibleLen(line), 0)
 	right := backgroundLine("", rightWidth, bgDark)
 	return left + line + right
 }
@@ -726,19 +746,31 @@ func modernMutedLine(text string, width int) string {
 }
 
 func modernFieldLine(label, value string, width int) string {
-	labelWidth := min(18, max(width/3, 8))
-	valueWidth := max(width-labelWidth-2, 4)
+	if width < 8 {
+		return modernLine(truncatePlain(value, width), width, colorBgMain)
+	}
+	innerWidth := max(width-4, 4)
+	labelWidth := min(18, max(innerWidth/3, 8))
+	valueWidth := max(innerWidth-labelWidth-2, 4)
 	labelStyle := mainMutedStyle(colorBgMain).Bold(true)
 	valueStyle := mainTitleStyle(colorBgMain)
-	content := labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+	borderStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgMain)).
+		Foreground(lipgloss.Color(colorBorder))
+	content := borderStyle.Render("│") +
+		mainBodyStyle(colorBgMain).Render(" ") +
+		labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
 		mainBodyStyle(colorBgMain).Render("  ") +
-		valueStyle.Render(truncatePlain(value, valueWidth))
+		valueStyle.Render(pad(truncatePlain(value, valueWidth), valueWidth)) +
+		mainBodyStyle(colorBgMain).Render(" ") +
+		borderStyle.Render("│")
 	return modernLine(content, width, colorBgMain)
 }
 
 func modernWrappedFieldLines(label, value string, width int) []string {
-	labelWidth := min(18, max(width/3, 8))
-	valueWidth := max(width-labelWidth-2, 4)
+	innerWidth := max(width-4, 4)
+	labelWidth := min(18, max(innerWidth/3, 8))
+	valueWidth := max(innerWidth-labelWidth-2, 4)
 	values := splitPlainWidth(value, valueWidth)
 	lines := make([]string, 0, len(values))
 	for index, value := range values {

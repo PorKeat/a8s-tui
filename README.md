@@ -192,6 +192,8 @@ The UI is highly responsive and designed for power users.
 - Select `Mono Repo` to detect multiple services from one repository.
 - Select `Multi Repo` to scan and merge services from several repositories.
 - Enter a GitHub remote, select `Scan repository`, and review the detected services before deploying.
+- Select `Env service` with `Left/Right`, then press `Enter` on `.env file` to browse for and import a local environment file into that service.
+- Imported environment values stay in memory for the deployment session. The TUI displays only variable counts and marks secret-like names as secrets.
 - Open `Relationships` after detection to choose a source service, target service, and relationship type. The TUI manages both `dependsOn` and generated relationship environment variables before deployment.
 - Relationship values use the target service name, matching the web canvas flow; the platform generates the final in-cluster runtime URL.
 - The TUI verifies every scanned Git remote again immediately before deployment.

@@ -123,3 +123,46 @@ func TestDetectMicroserviceRepositoryRejectsPrivateRepository(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestDetectMicroserviceRepositoryExplainsGitHubRateLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	_, err := client.DetectMicroserviceRepository(
+		context.Background(),
+		"access",
+		"https://github.com/team/platform",
+		"main",
+	)
+	if err == nil || !strings.Contains(err.Error(), "rate limit exceeded") ||
+		!strings.Contains(err.Error(), "unauthenticated public scans may be rate-limited") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDetectMicroserviceRepositoryExplainsMissingBranch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	_, err := client.DetectMicroserviceRepository(
+		context.Background(),
+		"access",
+		"https://github.com/team/platform",
+		"missing",
+	)
+	if err == nil || !strings.Contains(err.Error(), "repository or branch was not found") {
+		t.Fatalf("err = %v", err)
+	}
+}
