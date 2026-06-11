@@ -47,13 +47,13 @@ func (m model) renderDashboardMonolithicDeployForm(width, height int) []string {
 	lead := "Deploy the Git project from this terminal directory."
 	if m.monolithForm.isMicroservices() {
 		title = "Microservices"
-		lead = "Deploy one service into a microservice workspace."
+		lead = "Scan repositories and deploy the detected services."
 	}
 	header := dashboardHeader(title, lead, width)
 	lines = append(lines, header...)
 	cardLines := monolithicDeployFormCard(m, width)
 	viewportHeight := max(height-len(lines), 1)
-	cardLines = scrollMonolithicFormLines(cardLines, m.monolithForm.focus, viewportHeight)
+	cardLines = scrollMonolithicFormLines(cardLines, m.monolithForm, viewportHeight)
 	lines = append(lines, cardLines...)
 	return fillStyled(lines, bgDark, width, height)
 }
@@ -68,11 +68,11 @@ func scrollDatabaseFormLines(lines []string, focus int, viewportHeight int) []st
 	return lines[offset:min(offset+viewportHeight, len(lines))]
 }
 
-func scrollMonolithicFormLines(lines []string, focus int, viewportHeight int) []string {
+func scrollMonolithicFormLines(lines []string, form monolithicDeployForm, viewportHeight int) []string {
 	if len(lines) <= viewportHeight {
 		return lines
 	}
-	focusLine := monolithicFormFocusLine(focus)
+	focusLine := monolithicFormFocusLine(form)
 	maxOffset := max(len(lines)-viewportHeight, 0)
 	offset := clamp(focusLine-viewportHeight/2, 0, maxOffset)
 	return lines[offset:min(offset+viewportHeight, len(lines))]
@@ -88,14 +88,18 @@ func databaseFormFocusLine(focus int) int {
 	return 27
 }
 
-func monolithicFormFocusLine(focus int) int {
-	if focus < 0 {
+func monolithicFormFocusLine(form monolithicDeployForm) int {
+	if form.relationshipOpen {
+		return 6 + form.relationshipFocus*3
+	}
+	if form.focus < 0 {
 		return 0
 	}
-	if focus <= 6 {
-		return 7 + focus*3
+	line := 7 + form.focus*3
+	if form.isMicroservices() && form.focus >= 4 {
+		line += microserviceDetectedServiceLineCount(form)
 	}
-	return 29
+	return line
 }
 
 func deploymentFeatureCard(width int, activeIndex int) []string {
@@ -234,6 +238,9 @@ func databaseDeployTitle(m model) string {
 }
 
 func monolithicDeployFormCard(m model, width int) []string {
+	if m.monolithForm.relationshipOpen {
+		return microserviceRelationshipEditorCard(m, width)
+	}
 	cardWidth := max(width-6, 42)
 	card := styleCard.Width(cardWidth)
 	title := mainTitleStyle(colorBgCard)
@@ -243,11 +250,17 @@ func monolithicDeployFormCard(m model, width int) []string {
 	if directory == "" {
 		directory = "."
 	}
+	contextLabel := "current directory"
+	contextLine := "Directory: " + directory
+	if m.monolithForm.isMicroservices() {
+		contextLabel = m.monolithForm.sourceModeLabel()
+		contextLine = "GitHub repository detection"
+	}
 	lines := []string{
 		cardContentLine(card, "", width),
-		cardContentLine(card, "  "+title.Render("Deploy "+m.monolithForm.title())+bodyStyle.Render("  ")+mutedStyle.Render("current directory"), width),
+		cardContentLine(card, "  "+title.Render("Deploy "+m.monolithForm.title())+bodyStyle.Render("  ")+mutedStyle.Render(contextLabel), width),
 		cardContentLine(card, "  "+mutedStyle.Render(monolithicDeployHelpText(m.monolithForm)), width),
-		cardContentLine(card, "  "+mutedStyle.Render("Directory: ")+bodyStyle.Render(directory), width),
+		cardContentLine(card, "  "+mutedStyle.Render(contextLine), width),
 		cardContentLine(card, "", width),
 	}
 	fields := []struct {
@@ -261,26 +274,30 @@ func monolithicDeployFormCard(m model, width int) []string {
 		{3, "App port", m.monolithForm.appPort},
 	}
 	if m.monolithForm.isMicroservices() {
-		fields = append(fields,
-			struct {
-				index int
-				label string
-				value string
-			}{4, "Service name", m.monolithForm.serviceName},
-			struct {
-				index int
-				label string
-				value string
-			}{5, "Framework", m.monolithForm.framework},
-			struct {
-				index int
-				label string
-				value string
-			}{6, "Service type", m.monolithForm.serviceType},
-		)
+		branchValue := m.monolithForm.branch
+		if m.monolithForm.sourceMode() == "multi-repo" {
+			branchValue = "Repository default"
+		}
+		fields = []struct {
+			index int
+			label string
+			value string
+		}{
+			{0, "Source mode", m.monolithForm.sourceModeLabel()},
+			{1, "Git remote", m.monolithForm.repoURL},
+			{2, "Branch", branchValue},
+			{3, "Scan repository", microserviceScanFieldValue(m.monolithForm)},
+			{4, "Project name", m.monolithForm.projectName},
+			{5, "Relationships", microserviceRelationshipSummary(m.monolithForm)},
+		}
 	}
 	for _, field := range fields {
 		lines = append(lines, monolithicDeployFieldBox(card, cardWidth, width, m, field.index, field.label, field.value)...)
+		if m.monolithForm.isMicroservices() && field.index == 3 {
+			lines = append(lines, cardContentLine(card, "", width))
+			lines = append(lines, microserviceDetectedServiceLines(card, cardWidth, width, m.monolithForm)...)
+			lines = append(lines, cardContentLine(card, "", width))
+		}
 	}
 	lines = append(lines, cardContentLine(card, "", width))
 	lines = append(lines, monolithicDeploySubmitBox(card, cardWidth, width, m)...)
@@ -288,6 +305,9 @@ func monolithicDeployFormCard(m model, width int) []string {
 	repoFullName := firstNonEmpty(m.monolithForm.repoFullName, "unknown repository")
 	framework := firstNonEmpty(m.monolithForm.framework, "auto")
 	payload := fmt.Sprintf("Detected: %s / %s / %s", repoFullName, firstNonEmpty(m.monolithForm.branch, "main"), framework)
+	if m.monolithForm.isMicroservices() {
+		payload = fmt.Sprintf("%s / %d repositories / %d services", m.monolithForm.sourceModeLabel(), len(m.monolithForm.scannedRepositories), len(m.monolithForm.detectedServices))
+	}
 	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(payload, cardWidth-4)), width))
 	if m.message != "" {
 		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
@@ -298,9 +318,203 @@ func monolithicDeployFormCard(m model, width int) []string {
 
 func monolithicDeployHelpText(form monolithicDeployForm) string {
 	if form.isMicroservices() {
-		return "Paste a Git remote. Enter submits a one-service microservice deploy."
+		return "Choose mono/multi repo, scan public GitHub remotes, review detected services, then deploy."
 	}
 	return "Vercel-style deploy from Git. Enter submits on Deploy."
+}
+
+func microserviceScanFieldValue(form monolithicDeployForm) string {
+	if form.scanLoading {
+		return "Scanning..."
+	}
+	if len(form.detectedServices) > 0 {
+		if form.sourceMode() == "multi-repo" {
+			return fmt.Sprintf("Add repository  /  %d services detected", len(form.detectedServices))
+		}
+		return fmt.Sprintf("%d services detected  /  scan again", len(form.detectedServices))
+	}
+	return "Scan repository"
+}
+
+func microserviceDetectedServiceLineCount(form monolithicDeployForm) int {
+	if len(form.detectedServices) == 0 {
+		return 4
+	}
+	count := min(len(form.detectedServices), 8) + 3
+	if len(form.detectedServices) > 8 {
+		count++
+	}
+	return count
+}
+
+func microserviceDetectedServiceLines(card lipgloss.Style, cardWidth, width int, form monolithicDeployForm) []string {
+	title := mainTitleStyle(colorBgCard)
+	mutedStyle := mainMutedStyle(colorBgCard)
+	bodyStyle := mainBodyStyle(colorBgCard)
+	lines := []string{
+		cardContentLine(card, "  "+title.Render(fmt.Sprintf("Detected services  %d", len(form.detectedServices))), width),
+	}
+	if len(form.detectedServices) == 0 {
+		status := firstNonEmpty(form.scanStatus, "Scan a repository to discover deployable services.")
+		return append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(status, cardWidth-4)), width))
+	}
+	limit := min(len(form.detectedServices), 8)
+	for _, service := range form.detectedServices[:limit] {
+		detail := joinNonEmpty(service.Framework, service.ServiceType, fmt.Sprintf(":%d", service.AppPort))
+		repository := firstNonEmpty(service.RepoFullName, service.RepoURL)
+		line := truncatePlain("  "+service.Name+"  "+detail+"  "+repository, cardWidth-4)
+		lines = append(lines, cardContentLine(card, bodyStyle.Render(line), width))
+	}
+	if len(form.detectedServices) > limit {
+		lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(fmt.Sprintf("+ %d more services", len(form.detectedServices)-limit)), width))
+	}
+	if form.scanStatus != "" {
+		lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(truncatePlain(form.scanStatus, cardWidth-4)), width))
+	}
+	return lines
+}
+
+func microserviceRelationshipSummary(form monolithicDeployForm) string {
+	relationships := 0
+	for _, service := range form.detectedServices {
+		relationships += len(service.DependsOn)
+	}
+	if len(form.detectedServices) < 2 {
+		return "Scan at least two services"
+	}
+	if relationships == 0 {
+		return "Manage service dependencies"
+	}
+	return fmt.Sprintf("Manage %d service dependencies", relationships)
+}
+
+func microserviceRelationshipEditorCard(m model, width int) []string {
+	form := m.monolithForm
+	cardWidth := max(width-6, 42)
+	card := styleCard.Width(cardWidth)
+	title := mainTitleStyle(colorBgCard)
+	bodyStyle := mainBodyStyle(colorBgCard)
+	mutedStyle := mainMutedStyle(colorBgCard)
+	services := form.detectedServices
+	sourceName := "..."
+	targetName := "..."
+	if form.relationshipSource >= 0 && form.relationshipSource < len(services) {
+		sourceName = services[form.relationshipSource].Name
+	}
+	if form.relationshipTarget >= 0 && form.relationshipTarget < len(services) {
+		targetName = services[form.relationshipTarget].Name
+	}
+	option := deploy.RelationshipOptions[clamp(form.relationshipType, 0, len(deploy.RelationshipOptions)-1)]
+	customValue := form.relationshipCustom
+	if option.Value != "custom" {
+		customValue = "Only used with Custom env var"
+	}
+	dependencies := form.relationshipDependencies()
+	currentDependency := "No existing relationships"
+	if len(dependencies) > 0 {
+		currentDependency = dependencies[clamp(form.relationshipCurrent, 0, len(dependencies)-1)]
+	}
+
+	lines := []string{
+		cardContentLine(card, "", width),
+		cardContentLine(card, "  "+title.Render("Manage Relationships")+bodyStyle.Render("  detected services"), width),
+		cardContentLine(card, "  "+mutedStyle.Render("The platform generates final runtime URLs from target service names."), width),
+		cardContentLine(card, "", width),
+	}
+	fields := []struct {
+		index int
+		label string
+		value string
+	}{
+		{0, "Source service", sourceName},
+		{1, "Target service", targetName},
+		{2, "Relationship type", option.Label},
+		{3, "Custom env var", customValue},
+		{4, "Add / update", sourceName + " -> " + targetName},
+		{5, "Existing", currentDependency},
+		{6, "Remove", currentDependency},
+		{7, "Done", "Return to deployment"},
+	}
+	for _, field := range fields {
+		lines = append(lines, microserviceRelationshipFieldBox(card, cardWidth, width, form, field.index, field.label, field.value)...)
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, cardContentLine(card, "  "+title.Render("Current dependencies"), width))
+	if len(dependencies) == 0 {
+		lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(sourceName+" has no dependencies yet."), width))
+	} else {
+		for _, dependency := range dependencies {
+			envNames := relationshipEnvNamesForTarget(services[form.relationshipSource], dependency)
+			detail := "depends_on"
+			if len(envNames) > 0 {
+				detail = strings.Join(envNames, ", ")
+			}
+			line := truncatePlain("  "+sourceName+" -> "+dependency+"  "+detail, cardWidth-4)
+			lines = append(lines, cardContentLine(card, bodyStyle.Render(line), width))
+		}
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	lines = append(lines, cardContentLine(card, "  "+mutedStyle.Render(option.Description), width))
+	if m.message != "" {
+		lines = append(lines, cardContentLine(card, "  "+bodyStyle.Render("* "+truncatePlain(m.message, cardWidth-4)), width))
+	}
+	lines = append(lines, cardContentLine(card, "", width))
+	return lines
+}
+
+func microserviceRelationshipFieldBox(
+	card lipgloss.Style,
+	cardWidth, width int,
+	form monolithicDeployForm,
+	index int,
+	label, value string,
+) []string {
+	active := form.relationshipFocus == index
+	rowBg := lipgloss.Color(colorBgCard)
+	border := lipgloss.Color(colorBorder)
+	labelStyle := mainMutedStyle(colorBgCard)
+	valueStyle := mainBodyStyle(colorBgCard)
+	prefixStyle := mainBodyStyle(colorBgCard)
+	prefix := "  "
+	if active {
+		border = lipgloss.Color(colorPrimary)
+		labelStyle = mainPrimaryStyle(colorBgCard)
+		valueStyle = mainTitleStyle(colorBgCard)
+		prefixStyle = mainPrimaryStyle(colorBgCard)
+		prefix = "> "
+	}
+	boxWidth := max(cardWidth-4, 24)
+	labelWidth := 19
+	valueWidth := max(boxWidth-labelWidth-8, 8)
+	content := prefixStyle.Render(prefix) +
+		labelStyle.Render(pad(truncatePlain(label, labelWidth), labelWidth)) +
+		mainBodyStyle(colorBgCard).Render("  ") +
+		valueStyle.Render(truncatePlain(firstNonEmpty(value, "..."), valueWidth))
+	box := lipgloss.NewStyle().
+		Background(rowBg).
+		Foreground(lipgloss.Color(colorText)).
+		Width(boxWidth).
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		BorderBackground(rowBg).
+		Render(content)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, cardContentLine(card, "  "+line, width))
+	}
+	return lines
+}
+
+func relationshipEnvNamesForTarget(service api.CreateMicroserviceServiceInput, target string) []string {
+	names := make([]string, 0)
+	for _, relationship := range service.Relationships {
+		if strings.EqualFold(strings.TrimSpace(relationship.Value), strings.TrimSpace(target)) {
+			names = append(names, relationship.Name)
+		}
+	}
+	return names
 }
 
 func databaseDeployFieldBox(card lipgloss.Style, cardWidth, width int, m model, index int, label, value string) []string {
@@ -428,7 +642,7 @@ func monolithicDeploySubmitBox(card lipgloss.Style, cardWidth, width int, m mode
 	}
 	labelText := "Deploy"
 	if m.monolithForm.isMicroservices() {
-		labelText = "Deploy Microservice"
+		labelText = "Deploy Microservice Workspace"
 	}
 	label := labelStyle.Render(labelText)
 	box := lipgloss.NewStyle().
@@ -482,6 +696,8 @@ func (m model) databaseDeployView(width, height int) tea.View {
 	view := tea.NewView(b.String())
 	view.AltScreen = true
 	view.WindowTitle = "A8S TUI - Deploy Database"
+	view.BackgroundColor = lipgloss.Color(colorBgMain)
+	view.ForegroundColor = lipgloss.Color(colorText)
 	return view
 }
 
@@ -503,13 +719,16 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	lines := make([]string, 0, height)
 	lines = append(lines, "")
 	deployKind := "Database"
-	if deployment.DeploymentMode == "monolith" {
+	switch deployment.DeploymentMode {
+	case "monolith":
 		deployKind = "Monolithic"
+	case "microservices":
+		deployKind = "Microservices"
 	}
 	lines = append(lines, spaces(leftMargin)+bold+fgLogo+"Deploy "+deployKind+reset+fgMuted+"  logs"+reset)
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Project "+reset+fgText+truncatePlain(title, contentWidth-18)+reset)
 	lines = append(lines, spaces(leftMargin)+fgMuted+"Status  "+reset+deploymentStatusDisplay(m, status, statusColor)+deployStatusSuffix(deployment, contentWidth))
-	lines = append(lines, monolithicDeploymentURLLines(deployment, contentWidth, leftMargin)...)
+	lines = append(lines, applicationDeploymentURLLines(deployment, contentWidth, leftMargin)...)
 	lines = append(lines, "")
 	lines = append(lines, spaces(leftMargin)+paneTitle("view logs", contentWidth, true))
 
@@ -566,11 +785,13 @@ func (m model) databaseDeployLogView(width, height int) tea.View {
 	view := tea.NewView(b.String())
 	view.AltScreen = true
 	view.WindowTitle = "A8S TUI - Deployment Logs"
+	view.BackgroundColor = lipgloss.Color(colorBgMain)
+	view.ForegroundColor = lipgloss.Color(colorText)
 	return view
 }
 
-func monolithicDeploymentURLLines(deployment api.DatabaseDeploymentRecord, width, leftMargin int) []string {
-	if deployment.DeploymentMode != "monolith" ||
+func applicationDeploymentURLLines(deployment api.DatabaseDeploymentRecord, width, leftMargin int) []string {
+	if (deployment.DeploymentMode != "monolith" && deployment.DeploymentMode != "microservices") ||
 		!api.DatabaseDeploymentTerminal(deployment.Status) ||
 		api.DatabaseDeploymentFailed(deployment.Status) ||
 		strings.TrimSpace(deployment.DeployURL) == "" {

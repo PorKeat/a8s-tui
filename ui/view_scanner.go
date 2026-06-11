@@ -363,7 +363,7 @@ func modernScannerChip(label string, selected bool) string {
 	prefix := "  "
 	if selected {
 		bg = colorPrimary
-		fg = colorTitle
+		fg = colorOnPrimary
 		prefix = "> "
 	}
 	return lipgloss.NewStyle().
@@ -408,13 +408,13 @@ func severityRank(severity string) int {
 func severityColor(severity string) string {
 	switch strings.ToUpper(strings.TrimSpace(severity)) {
 	case "CRITICAL":
-		return "#fb7185"
+		return colorError
 	case "HIGH":
-		return "#f97316"
+		return colorError
 	case "MEDIUM":
-		return "#facc15"
+		return colorWarning
 	case "LOW":
-		return "#4ade80"
+		return colorSuccess
 	default:
 		return colorMuted
 	}

@@ -97,17 +97,23 @@ type CreateMicroserviceDeploymentInput struct {
 }
 
 type CreateMicroserviceServiceInput struct {
-	Name          string
-	RepoURL       string
-	RepoFullName  string
-	RepoProvider  string
-	Path          string
-	Branch        string
-	AppPort       int
-	ServiceType   string
-	Framework     string
-	ExposePublic  bool
-	PrimaryPublic bool
+	Name              string
+	RepoURL           string
+	RepoFullName      string
+	RepoProvider      string
+	Path              string
+	Manifest          string
+	ServiceModule     string
+	Branch            string
+	AppPort           int
+	ServiceType       string
+	Framework         string
+	ExposePublic      bool
+	PrimaryPublic     bool
+	RepoCredentialsID string
+	Env               []MicroserviceEnvInput
+	Relationships     []MicroserviceRelationInput
+	DependsOn         []string
 }
 
 type MonolithicDeploymentRecord struct {
@@ -600,6 +606,9 @@ func (c ProjectClient) CreateMicroserviceDeployment(
 	token string,
 	input CreateMicroserviceDeploymentInput,
 ) (MonolithicDeploymentRecord, error) {
+	if _, err := c.ResolveEffectiveClusterNamespace(ctx, token, ""); err != nil {
+		return MonolithicDeploymentRecord{}, fmt.Errorf("prepare workspace: %w", err)
+	}
 	backendUserID, _, err := c.fetchBackendUserID(ctx, token)
 	if err != nil {
 		return MonolithicDeploymentRecord{}, err
@@ -624,6 +633,24 @@ func (c ProjectClient) CreateMicroserviceDeployment(
 		}
 		if path := strings.TrimSpace(service.Path); path != "" {
 			item["path"] = path
+		}
+		if manifest := strings.TrimSpace(service.Manifest); manifest != "" {
+			item["manifest"] = manifest
+		}
+		if serviceModule := strings.TrimSpace(service.ServiceModule); serviceModule != "" {
+			item["serviceModule"] = serviceModule
+		}
+		if repoCredentialsID := strings.TrimSpace(service.RepoCredentialsID); repoCredentialsID != "" {
+			item["repoCredentialsId"] = repoCredentialsID
+		}
+		if len(service.Env) > 0 {
+			item["env"] = service.Env
+		}
+		if len(service.Relationships) > 0 {
+			item["relationships"] = service.Relationships
+		}
+		if len(service.DependsOn) > 0 {
+			item["dependsOn"] = service.DependsOn
 		}
 		services = append(services, item)
 	}

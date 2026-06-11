@@ -24,25 +24,33 @@ func applyTheme(index int) {
 	colorMuted = palette.Muted
 	colorTitle = palette.Title
 	colorBorder = palette.Border
+	colorOnPrimary = palette.OnPrimary
+	colorInfo = palette.Info
+	colorSuccess = palette.Success
+	colorWarning = palette.Warning
+	colorError = palette.Error
+	colorTrack = palette.Track
+	colorBgDanger = palette.BgDanger
+	colorBgDangerActive = palette.BgDangerOpen
 
 	if uitheme.ThemeLabel(index) == "Light" {
-		fgBlue = ansiFg("#2f6fbd")
-		fgPurple = ansiFg("#765bd8")
-		fgAccent = ansiFg("#0b7285")
-		fgWarn = ansiFg("#a05a00")
-		fgError = ansiFg("#c92a2a")
-		fgGreen = ansiFg("#2f9e44")
+		fgBlue = ansiFg(colorInfo)
+		fgPurple = ansiFg(colorPrimary)
+		fgAccent = ansiFg(colorInfo)
+		fgWarn = ansiFg(colorWarning)
+		fgError = ansiFg(colorError)
+		fgGreen = ansiFg(colorSuccess)
 	} else {
-		fgBlue = ansiFg("#7aaeff")
-		fgPurple = ansiFg("#b59dff")
-		fgAccent = ansiFg("#5fd7ff")
-		fgWarn = ansiFg("#ffe066")
-		fgError = ansiFg("#ff8787")
-		fgGreen = ansiFg("#77f27f")
+		fgBlue = ansiFg(colorInfo)
+		fgPurple = ansiFg(colorPrimary)
+		fgAccent = ansiFg(colorInfo)
+		fgWarn = ansiFg(colorWarning)
+		fgError = ansiFg(colorError)
+		fgGreen = ansiFg(colorSuccess)
 	}
 
 	fgLogo = ansiFg(colorPrimary)
-	fgLogo2 = ansiFg("#b59dff")
+	fgLogo2 = ansiFg(colorPrimary)
 	fgText = ansiFg(colorText)
 	fgMuted = ansiFg(colorMuted)
 	fgOrange = ansiFg(colorPrimary)
@@ -97,6 +105,9 @@ func applyTheme(index int) {
 
 func (m model) View() tea.View {
 	applyTheme(m.themeIndex)
+	m.spinner.Style = lipgloss.NewStyle().
+		Background(lipgloss.Color(colorBgMain)).
+		Foreground(lipgloss.Color(colorPrimary))
 	width := max(m.width, 80)
 	height := max(m.height, 24)
 	if m.state != stateReady {
@@ -160,6 +171,8 @@ func (m model) launcherView(width, height int) tea.View {
 	view := tea.NewView(b.String())
 	view.AltScreen = true
 	view.WindowTitle = "A8S TUI"
+	view.BackgroundColor = lipgloss.Color(colorBgMain)
+	view.ForegroundColor = lipgloss.Color(colorText)
 	return view
 }
 
@@ -736,7 +749,7 @@ func metricLine(width int, metrics []string, action string) string {
 	}
 	button := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorPrimary)).
-		Foreground(lipgloss.Color(colorTitle)).
+		Foreground(lipgloss.Color(colorOnPrimary)).
 		Bold(true).
 		Padding(0, 1).
 		Render(action)
@@ -819,15 +832,15 @@ func itemIconColor(item navigationItem) string {
 	}
 	switch item.page {
 	case pageProjects:
-		return "#7aaeff"
+		return colorInfo
 	case pageDeployment:
 		return colorPrimary
 	case pageImageScanner:
 		return colorPrimary
 	case pageLogs, pageMonitoring:
-		return "#77f27f"
+		return colorSuccess
 	case pageUserSettings:
-		return "#b59dff"
+		return colorPrimary
 	default:
 		return colorMuted
 	}

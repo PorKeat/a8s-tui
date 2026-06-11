@@ -57,6 +57,8 @@ func (m model) modernDashboardView(width, height int) tea.View {
 	view := tea.NewView(b.String())
 	view.AltScreen = true
 	view.WindowTitle = "A8S TUI"
+	view.BackgroundColor = lipgloss.Color(colorBgMain)
+	view.ForegroundColor = lipgloss.Color(colorText)
 	return view
 }
 
@@ -114,17 +116,17 @@ func (m model) modernRightPane(width, height int) string {
 func modernTopBar(m model, width int) string {
 	title := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorPrimary)).
-		Foreground(lipgloss.Color(colorTitle)).
+		Foreground(lipgloss.Color(colorOnPrimary)).
 		Bold(true).
 		Render(" a8s-cli ")
 	count := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorPrimary)).
-		Foreground(lipgloss.Color("#a7f3d0")).
+		Foreground(lipgloss.Color(colorOnPrimary)).
 		Bold(true).
 		Render(fmt.Sprintf(" %d projects ", len(m.projects)))
 	updated := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorPrimary)).
-		Foreground(lipgloss.Color(colorMuted)).
+		Foreground(lipgloss.Color(colorOnPrimary)).
 		Bold(true).
 		Render(" updated " + m.refreshAge() + " ")
 	left := title + count + updated
@@ -372,7 +374,7 @@ func modernProjectRow(project api.LiveProject, width int, active bool) string {
 	if active {
 		rowBg = colorBgActive
 		nameStyle = mainTitleStyle(rowBg)
-		statusStyle = lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Foreground(lipgloss.Color("#4ade80")).Bold(true)
+		statusStyle = lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Foreground(lipgloss.Color(colorSuccess)).Bold(true)
 		prefix = "> "
 	}
 	statusWidth := 12
@@ -535,13 +537,13 @@ func (m model) modernRouteCheckLines(width int) []string {
 			break
 		}
 		state := "FAIL"
-		color := "#fb7185"
+		color := colorError
 		if route.BrowserOK {
 			state = "PASS"
-			color = "#4ade80"
+			color = colorSuccess
 		} else if route.Warning {
 			state = "WARN"
-			color = "#facc15"
+			color = colorWarning
 		}
 		badge := lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(color)).Bold(true).Render(pad(state, 5))
 		meta := firstNonEmpty(route.Error, fmt.Sprintf("HTTP %d · %dms", route.HTTPStatus, route.DurationMS))
@@ -556,7 +558,7 @@ func (m model) modernDeploymentDetail(width, height int) []string {
 	feature := m.selectedDeploymentFeature()
 	lines := []string{
 		modernTitleLine(feature.Label, width),
-		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color("#4ade80")).Bold(true).Render("● "+deploymentStatusText(feature.Ready)), width, colorBgMain),
+		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(colorSuccess)).Bold(true).Render("● "+deploymentStatusText(feature.Ready)), width, colorBgMain),
 		modernLine("", width, colorBgMain),
 		modernRule(width),
 		modernLine("", width, colorBgMain),
@@ -624,7 +626,7 @@ func modernThemeChip(label string, selected bool) string {
 	prefix := "  "
 	if selected {
 		bg = colorPrimary
-		fg = colorTitle
+		fg = colorOnPrimary
 		prefix = "> "
 	}
 	return lipgloss.NewStyle().
@@ -711,15 +713,15 @@ func modernButton(label string, selected, danger bool) string {
 	bg := colorBgPill
 	fg := colorText
 	if danger {
-		bg = "#3f2638"
-		fg = "#fb7185"
+		bg = colorBgDanger
+		fg = colorError
 	}
 	if selected {
 		if danger {
-			bg = "#6f2d4a"
+			bg = colorBgDangerActive
 		} else {
 			bg = colorPrimary
-			fg = colorTitle
+			fg = colorOnPrimary
 		}
 		label = "> " + label
 	} else {
@@ -736,11 +738,11 @@ func modernButton(label string, selected, danger bool) string {
 func statusColor(status string) string {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "READY", "RUNNING", "DEPLOYED", "HEALTHY", "SUCCESS", "SUCCEEDED":
-		return "#4ade80"
+		return colorSuccess
 	case "PENDING", "STARTING", "PROVISIONING", "DEPLOYING":
-		return "#facc15"
+		return colorWarning
 	case "FAILED", "ERROR", "UNHEALTHY":
-		return "#fb7185"
+		return colorError
 	default:
 		return colorMuted
 	}

@@ -51,10 +51,18 @@ func LoadConfig() (AppConfig, error) {
 	}
 
 	var missing []string
-	if cfg.KeycloakURL == "" { missing = append(missing, "KEYCLOAK_URL") }
-	if cfg.KeycloakRealm == "" { missing = append(missing, "KEYCLOAK_REALM") }
-	if cfg.KeycloakClientID == "" { missing = append(missing, "KEYCLOAK_CLIENT_ID") }
-	if cfg.KeycloakRedirectURL == "" { missing = append(missing, "KEYCLOAK_REDIRECT_URL") }
+	if cfg.KeycloakURL == "" {
+		missing = append(missing, "KEYCLOAK_URL")
+	}
+	if cfg.KeycloakRealm == "" {
+		missing = append(missing, "KEYCLOAK_REALM")
+	}
+	if cfg.KeycloakClientID == "" {
+		missing = append(missing, "KEYCLOAK_CLIENT_ID")
+	}
+	if cfg.KeycloakRedirectURL == "" {
+		missing = append(missing, "KEYCLOAK_REDIRECT_URL")
+	}
 	if len(missing) > 0 {
 		return cfg, fmt.Errorf("missing required TUI env: %s", strings.Join(missing, ", "))
 	}
@@ -77,12 +85,12 @@ func envCandidates(path string) []string {
 	if base == "tui" {
 		candidates = append(candidates, filepath.Join(cwd, "..", path))
 	}
-	
+
 	// Add global home directory config
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".a8s-cli.env"))
 	}
-	
+
 	return uniquePaths(candidates)
 }
 

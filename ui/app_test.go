@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"github.com/PorKeat/a8s-tui/api"
 	"github.com/PorKeat/a8s-tui/auth"
 	"github.com/PorKeat/a8s-tui/config"
@@ -122,10 +123,26 @@ func TestProjectsLoadStartsOutsideProjectWorkspace(t *testing.T) {
 	}
 }
 
-func TestInitialThemeDefaultsToOrange(t *testing.T) {
+func TestInitialThemeDefaultsToLight(t *testing.T) {
 	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
-	if m.themeLabel() != "Orange" {
-		t.Fatalf("expected Orange default theme, got %q", m.themeLabel())
+	if m.themeLabel() != "Light" {
+		t.Fatalf("expected Light default theme, got %q", m.themeLabel())
+	}
+}
+
+func TestLightThemeAppliesLightAndAccessibleSemanticColors(t *testing.T) {
+	applyTheme(1)
+	if colorPrimary != "#ea580c" {
+		t.Fatalf("light theme accent is not orange: %s", colorPrimary)
+	}
+	if colorBgMain != "#f7f7fb" || colorBgSide != "#f1f2f8" || colorBgCard != "#ffffff" {
+		t.Fatalf("light backgrounds not applied: main=%s side=%s card=%s", colorBgMain, colorBgSide, colorBgCard)
+	}
+	if colorBgDanger == "#3f2638" || colorBgDangerActive == "#6f2d4a" {
+		t.Fatalf("light theme kept dark danger backgrounds: %s %s", colorBgDanger, colorBgDangerActive)
+	}
+	if statusColor("deployed") != colorSuccess || statusColor("failed") != colorError {
+		t.Fatal("status colors are not using the active light semantic palette")
 	}
 }
 
@@ -532,8 +549,53 @@ func TestMonolithicDeployResultOpensJenkinsLogs(t *testing.T) {
 	if cmd != nil || m.deployLog.Status != "DEPLOYED" || !strings.Contains(m.deployLog.StatusLog, "Build complete") {
 		t.Fatalf("completed Jenkins log = %#v cmd=%v", m, cmd)
 	}
-	urlLines := monolithicDeploymentURLLines(m.deployLog, 24, 0)
+	urlLines := applicationDeploymentURLLines(m.deployLog, 24, 0)
 	if len(urlLines) < 2 || !strings.Contains(urlLines[0], "https://web") || !strings.Contains(urlLines[len(urlLines)-1], "com") {
+		t.Fatalf("expected full wrapped deployment URL, got %#v", urlLines)
+	}
+}
+
+func TestMicroserviceDeployResultOpensJenkinsLogs(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm.mode = "microservices"
+	m.monolithForm.projectName = "commerce"
+
+	next, cmd := m.Update(microserviceDeployResultMsg{deployment: api.MonolithicDeploymentRecord{
+		ProjectID:      "project-2",
+		Name:           "commerce",
+		Status:         "CREATED",
+		DeployURL:      "https://commerce.autonomous-istad.com",
+		QueueItemID:    43,
+		JenkinsJobName: "deploy-microservices",
+	}})
+	m = next.(model)
+	if cmd == nil || !m.deployLogOpen || m.jenkinsLogQueue != 43 || m.jenkinsLogJob != "deploy-microservices" {
+		t.Fatalf("expected Jenkins log viewer, model=%#v cmd=%v", m, cmd)
+	}
+	if m.deployLog.DeploymentMode != "microservices" || m.deployLog.Status != "QUEUED" || m.deployLog.DeployURL != "https://commerce.autonomous-istad.com" {
+		t.Fatalf("deployment log = %#v", m.deployLog)
+	}
+
+	next, cmd = m.Update(jenkinsDeploymentStreamMsg{
+		queueID: 43,
+		chunk: api.JenkinsLogStreamChunk{
+			Lines:     []string{"Services deployed"},
+			Status:    "DEPLOYED",
+			Message:   "Jenkins build completed: SUCCESS",
+			Completed: true,
+		},
+	})
+	m = next.(model)
+	if cmd != nil || m.deployLog.Status != "DEPLOYED" || !strings.Contains(m.deployLog.StatusLog, "Services deployed") {
+		t.Fatalf("completed Jenkins log = %#v cmd=%v", m, cmd)
+	}
+	if m.message != "Microservices deployment finished: commerce" {
+		t.Fatalf("message = %q", m.message)
+	}
+	urlLines := applicationDeploymentURLLines(m.deployLog, 30, 0)
+	if len(urlLines) < 2 || !strings.Contains(urlLines[0], "https://commerce.auton") || !strings.Contains(urlLines[len(urlLines)-1], "omous-istad.com") {
 		t.Fatalf("expected full wrapped deployment URL, got %#v", urlLines)
 	}
 }
@@ -684,13 +746,220 @@ func TestBackspaceOnEmptyMonolithicGitRemoteDoesNotCrash(t *testing.T) {
 	}
 }
 
-func TestNewMonolithicDeployFormDoesNotDefaultGitRemote(t *testing.T) {
+func TestNewApplicationDeployFormsDoNotDefaultNamesOrGitRemote(t *testing.T) {
 	form := newMonolithicDeployForm()
+	if form.projectName != "" || form.serviceName != "" {
+		t.Fatalf("monolithic names should start empty, got project=%q service=%q", form.projectName, form.serviceName)
+	}
 	if form.repoURL != "" {
 		t.Fatalf("repoURL should start empty, got %q", form.repoURL)
 	}
 	if form.repoFullName != "" {
 		t.Fatalf("repoFullName should start empty, got %q", form.repoFullName)
+	}
+
+	form = newMicroservicesDeployForm()
+	if form.projectName != "" || form.serviceName != "" {
+		t.Fatalf("microservice names should start empty, got project=%q service=%q", form.projectName, form.serviceName)
+	}
+}
+
+func TestMicroserviceSourceModeScanAndMergeFlow(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+	m.monolithForm.projectName = "commerce"
+	m.monolithForm.focus = 0
+
+	next, cmd := m.updateKey(specialKeyMsg(tea.KeyRight))
+	m = next.(model)
+	if cmd != nil || m.monolithForm.sourceMode() != "multi-repo" {
+		t.Fatalf("expected multi-repo source mode, form=%#v cmd=%v", m.monolithForm, cmd)
+	}
+
+	next, cmd = m.Update(microserviceScanResultMsg{result: api.MicroserviceDetectionResult{
+		Repository: api.DetectedMicroserviceRepository{FullName: "team/api", DefaultBranch: "main"},
+		Services: []api.DetectedMicroserviceService{{
+			Name:          "api",
+			RepoURL:       "https://github.com/team/api",
+			RepoFullName:  "team/api",
+			Branch:        "main",
+			AppPort:       8080,
+			ServiceType:   "backend",
+			ExposePublic:  true,
+			PrimaryPublic: true,
+		}},
+	}})
+	m = next.(model)
+	if cmd != nil || len(m.monolithForm.detectedServices) != 1 || m.monolithForm.repoURL != "" {
+		t.Fatalf("first scan form=%#v cmd=%v", m.monolithForm, cmd)
+	}
+
+	next, cmd = m.Update(microserviceScanResultMsg{result: api.MicroserviceDetectionResult{
+		Repository: api.DetectedMicroserviceRepository{FullName: "team/web", DefaultBranch: "develop"},
+		Services: []api.DetectedMicroserviceService{{
+			Name:          "web",
+			RepoURL:       "https://github.com/team/web",
+			RepoFullName:  "team/web",
+			Branch:        "develop",
+			AppPort:       3000,
+			ServiceType:   "frontend",
+			ExposePublic:  true,
+			PrimaryPublic: true,
+		}},
+	}})
+	m = next.(model)
+	if cmd != nil || len(m.monolithForm.detectedServices) != 2 || len(m.monolithForm.scannedRepositories) != 2 {
+		t.Fatalf("merged scan form=%#v cmd=%v", m.monolithForm, cmd)
+	}
+	input, err := m.monolithForm.microserviceInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryCount := 0
+	for _, service := range input.Services {
+		if service.PrimaryPublic {
+			primaryCount++
+		}
+	}
+	if primaryCount != 1 {
+		t.Fatalf("expected one primary public service, input=%#v", input)
+	}
+}
+
+func TestMicroserviceDetectedServicesStayVisibleAfterScan(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+
+	next, _ := m.Update(microserviceScanResultMsg{result: api.MicroserviceDetectionResult{
+		Repository: api.DetectedMicroserviceRepository{FullName: "team/platform", DefaultBranch: "main"},
+		Services: []api.DetectedMicroserviceService{
+			{Name: "config-server", RepoURL: "https://github.com/team/platform", AppPort: 8089},
+			{Name: "orders-service", RepoURL: "https://github.com/team/platform", AppPort: 8080},
+		},
+	}})
+	m = next.(model)
+	lines := m.renderDashboardMonolithicDeployForm(68, 20)
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "2 services detected") ||
+		!strings.Contains(rendered, "Detected services  2") ||
+		!strings.Contains(rendered, "config-server") {
+		t.Fatalf("detected services not visible after scan:\n%s", rendered)
+	}
+	if m.monolithForm.focus != 3 {
+		t.Fatalf("focus = %d, want scan result focus", m.monolithForm.focus)
+	}
+}
+
+func TestMicroserviceScanFailureIsVisibleNearDetectedServices(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+
+	next, _ := m.Update(microserviceScanResultMsg{err: fmt.Errorf("public GitHub repository is unavailable")})
+	m = next.(model)
+	rendered := strings.Join(m.renderDashboardMonolithicDeployForm(80, 24), "\n")
+	if !strings.Contains(rendered, "Scan failed: public GitHub repository is unavailable") {
+		t.Fatalf("scan error not visible near detected services:\n%s", rendered)
+	}
+}
+
+func TestMicroserviceDeployRequiresRepositoryScan(t *testing.T) {
+	form := newMicroservicesDeployForm()
+	form.projectName = "commerce"
+	if _, err := form.microserviceInput(); err == nil || !strings.Contains(err.Error(), "Scan at least one repository") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMicroserviceDeployRejectsDuplicateDetectedServiceNames(t *testing.T) {
+	form := newMicroservicesDeployForm()
+	form.projectName = "commerce"
+	form.detectedServices = []api.CreateMicroserviceServiceInput{
+		{Name: "api", RepoURL: "https://github.com/team/one", RepoFullName: "team/one"},
+		{Name: "API", RepoURL: "https://github.com/team/two", RepoFullName: "team/two"},
+	}
+	if _, err := form.microserviceInput(); err == nil || !strings.Contains(err.Error(), "duplicate name") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMicroserviceRelationshipEditorAddsAndRemovesDependency(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.monolithFormOpen = true
+	m.monolithForm = newMicroservicesDeployForm()
+	m.monolithForm.detectedServices = []api.CreateMicroserviceServiceInput{
+		{Name: "orders-service", ServiceType: "backend"},
+		{Name: "config-server", ServiceType: "backend"},
+	}
+	m.monolithForm.focus = 5
+
+	next, cmd := m.updateMonolithicDeployForm(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !m.monolithForm.relationshipOpen {
+		t.Fatalf("relationship editor not opened: form=%#v cmd=%v", m.monolithForm, cmd)
+	}
+	m.monolithForm.relationshipFocus = 4
+	next, cmd = m.updateMonolithicDeployForm(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil {
+		t.Fatalf("unexpected command: %v", cmd)
+	}
+	service := m.monolithForm.detectedServices[0]
+	if len(service.DependsOn) != 1 || service.DependsOn[0] != "config-server" {
+		t.Fatalf("dependsOn = %#v", service.DependsOn)
+	}
+	if len(service.Relationships) == 0 || service.Relationships[0].Value != "config-server" {
+		t.Fatalf("relationships = %#v", service.Relationships)
+	}
+
+	m.monolithForm.relationshipFocus = 6
+	next, cmd = m.updateMonolithicDeployForm(keyMsg("enter"))
+	m = next.(model)
+	service = m.monolithForm.detectedServices[0]
+	if cmd != nil || len(service.DependsOn) != 0 || len(service.Relationships) != 0 {
+		t.Fatalf("relationship not removed: service=%#v cmd=%v", service, cmd)
+	}
+}
+
+func TestMicroserviceInputKeepsManagedRelationships(t *testing.T) {
+	form := newMicroservicesDeployForm()
+	form.projectName = "commerce"
+	form.detectedServices = []api.CreateMicroserviceServiceInput{
+		{
+			Name:          "orders-service",
+			RepoURL:       "https://github.com/team/commerce",
+			DependsOn:     []string{"eureka-server"},
+			Relationships: []api.MicroserviceRelationInput{{Name: "EUREKA_URL", Value: "eureka-server"}},
+		},
+		{Name: "eureka-server", RepoURL: "https://github.com/team/commerce"},
+	}
+
+	input, err := form.microserviceInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Services[0].DependsOn) != 1 || len(input.Services[0].Relationships) != 1 {
+		t.Fatalf("managed relationships missing from input: %#v", input.Services[0])
+	}
+}
+
+func TestMicroserviceInputRejectsUnknownDependency(t *testing.T) {
+	form := newMicroservicesDeployForm()
+	form.projectName = "commerce"
+	form.detectedServices = []api.CreateMicroserviceServiceInput{{
+		Name:      "orders-service",
+		RepoURL:   "https://github.com/team/commerce",
+		DependsOn: []string{"missing-service"},
+	}}
+
+	if _, err := form.microserviceInput(); err == nil || !strings.Contains(err.Error(), "unknown service") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

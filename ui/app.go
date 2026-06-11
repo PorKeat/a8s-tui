@@ -196,6 +196,12 @@ type microserviceDeployResultMsg struct {
 	err        error
 }
 
+type microserviceScanResultMsg struct {
+	tokens auth.TokenSet
+	result api.MicroserviceDetectionResult
+	err    error
+}
+
 type imageScannerLoadMsg struct {
 	tokens auth.TokenSet
 	images []api.ImageScannerImage
@@ -267,17 +273,29 @@ type databaseDeployForm struct {
 }
 
 type monolithicDeployForm struct {
-	focus        int
-	mode         string
-	projectName  string
-	serviceName  string
-	repoURL      string
-	repoFullName string
-	branch       string
-	appPort      string
-	framework    string
-	serviceType  string
-	directory    string
+	focus               int
+	mode                string
+	sourceModeIndex     int
+	projectName         string
+	serviceName         string
+	repoURL             string
+	repoFullName        string
+	branch              string
+	appPort             string
+	framework           string
+	serviceType         string
+	directory           string
+	scanLoading         bool
+	scanStatus          string
+	scannedRepositories []string
+	detectedServices    []api.CreateMicroserviceServiceInput
+	relationshipOpen    bool
+	relationshipFocus   int
+	relationshipSource  int
+	relationshipTarget  int
+	relationshipType    int
+	relationshipCustom  string
+	relationshipCurrent int
 }
 
 func initialModel(config config.AppConfig, configErr error) model {
@@ -296,7 +314,7 @@ func initialModel(config config.AppConfig, configErr error) model {
 		observabilityAPI: api.NewObservabilityClient(config.BackendBaseURL),
 		spinner: spinner.New(
 			spinner.WithSpinner(spinner.MiniDot),
-			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#f56618"))),
+			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrimary))),
 		),
 		dbForm:       newDatabaseDeployForm(),
 		monolithForm: newMonolithicDeployForm(),
@@ -305,7 +323,7 @@ func initialModel(config config.AppConfig, configErr error) model {
 		height:       36,
 		page:         pageProjects,
 		focus:        focusSidebar,
-		themeIndex:   2,
+		themeIndex:   1,
 		message:      message,
 	}
 }
@@ -534,7 +552,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.monolithFormOpen = false
 		m.monolithForm = newMonolithicDeployForm()
 		m.deployLogOpen = true
-		m.deployLog = monolithicDeploymentLogRecord(msg.deployment)
+		m.deployLog = jenkinsDeploymentLogRecord(msg.deployment, "monolith")
 		m.deployLogFollow = true
 		m.followLatestDeploymentLog()
 		m.jenkinsLogJob = firstNonEmpty(msg.deployment.JenkinsJobName, "deploy-pipeline")
@@ -562,12 +580,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deployLog.StatusMessage = msg.chunk.Message
 		}
 		m.syncDeploymentLogOffset()
-		name := firstNonEmpty(m.deployLog.ProjectName, "monolith")
+		kind := jenkinsDeploymentKind(m.deployLog.DeploymentMode)
+		name := firstNonEmpty(m.deployLog.ProjectName, strings.ToLower(kind))
 		if msg.chunk.Completed {
 			if api.DatabaseDeploymentFailed(m.deployLog.Status) {
-				m.message = "Monolithic deployment failed: " + name
+				m.message = kind + " deployment failed: " + name
 			} else {
-				m.message = "Monolithic deployment finished: " + name
+				m.message = kind + " deployment finished: " + name
 			}
 			return m, nil
 		}
@@ -575,7 +594,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = "Jenkins log stream paused: " + msg.err.Error()
 			return m, m.fetchJenkinsDeploymentStreamCmd(2 * time.Second)
 		}
-		m.message = "Monolithic deployment is still running..."
+		m.message = kind + " deployment is still running..."
 		return m, m.fetchJenkinsDeploymentStreamCmd(500 * time.Millisecond)
 	case microserviceDeployResultMsg:
 		if msg.tokens.AccessToken != "" {
@@ -590,13 +609,62 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		name := firstNonEmpty(msg.deployment.Name, m.monolithForm.projectName, "microservices")
 		m.monolithFormOpen = false
 		m.monolithForm = newMonolithicDeployForm()
-		m.state = stateLoading
+		m.deployLogOpen = true
+		m.deployLog = jenkinsDeploymentLogRecord(msg.deployment, "microservices")
+		m.deployLogFollow = true
+		m.followLatestDeploymentLog()
+		m.jenkinsLogJob = firstNonEmpty(msg.deployment.JenkinsJobName, "deploy-microservices")
+		m.jenkinsLogQueue = msg.deployment.QueueItemID
+		m.state = stateReady
 		if msg.deployment.QueueItemID > 0 {
 			m.message = fmt.Sprintf("Microservices deployment queued: %s (#%d)", name, msg.deployment.QueueItemID)
+			return m, m.fetchJenkinsDeploymentStreamCmd(0)
 		} else {
-			m.message = "Microservices deployment queued: " + name
+			m.message = "Microservices deployment accepted without Jenkins queue log context: " + name
 		}
-		return m, m.fetchProjectsCmd()
+		return m, nil
+	case microserviceScanResultMsg:
+		if msg.tokens.AccessToken != "" {
+			m.tokens = msg.tokens
+		}
+		m.monolithForm.scanLoading = false
+		if msg.err != nil {
+			m.monolithForm.scanStatus = "Scan failed: " + msg.err.Error()
+			m.monolithForm.focus = 3
+			m.message = "Repository scan failed: " + msg.err.Error()
+			return m, nil
+		}
+		detected := make([]api.CreateMicroserviceServiceInput, 0, len(msg.result.Services))
+		for _, service := range msg.result.Services {
+			detected = append(detected, service.DeploymentInput())
+		}
+		if m.monolithForm.sourceMode() == "mono-repo" {
+			m.monolithForm.detectedServices = detected
+			m.monolithForm.scannedRepositories = nil
+		} else {
+			m.monolithForm.detectedServices = mergeDetectedMicroserviceServices(m.monolithForm.detectedServices, detected)
+		}
+		m.monolithForm.ensureRelationshipTarget()
+		m.monolithForm.clampRelationshipCurrent()
+		repositoryName := firstNonEmpty(msg.result.Repository.FullName, m.monolithForm.repoFullName, m.monolithForm.repoURL)
+		m.monolithForm.scannedRepositories = appendUniqueText(m.monolithForm.scannedRepositories, repositoryName)
+		if branch := strings.TrimSpace(msg.result.Repository.DefaultBranch); branch != "" &&
+			(m.monolithForm.sourceMode() == "mono-repo" || len(m.monolithForm.scannedRepositories) == 0) {
+			m.monolithForm.branch = branch
+		}
+		if m.monolithForm.sourceMode() == "multi-repo" {
+			m.monolithForm.repoURL = ""
+			m.monolithForm.repoFullName = ""
+		}
+		m.monolithForm.focus = 3
+		if len(detected) == 0 {
+			m.monolithForm.scanStatus = "No deployable services found. Check the branch and service manifests."
+			m.message = "No deployable services detected in " + repositoryName
+		} else {
+			m.monolithForm.scanStatus = fmt.Sprintf("Detected %d deployable service(s) in %s", len(detected), repositoryName)
+			m.message = fmt.Sprintf("Detected %d service(s) in %s", len(detected), repositoryName)
+		}
+		return m, nil
 	case imageScannerLoadMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -984,7 +1052,11 @@ func (m model) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		m.appendDatabaseFormText(text)
 		m.message = "Pasted into field"
 	case m.monolithFormOpen:
-		m.appendMonolithicFormText(text)
+		if m.monolithForm.relationshipOpen && m.monolithForm.relationshipFocus == 3 {
+			m.monolithForm.relationshipCustom += text
+		} else {
+			m.appendMonolithicFormText(text)
+		}
 		m.message = "Pasted into field"
 	case m.filtering:
 		m.filter += text
@@ -1015,8 +1087,6 @@ func newProjectDeployForm(mode string) monolithicDeployForm {
 	local := deploy.DetectLocalProject()
 	return monolithicDeployForm{
 		mode:        mode,
-		projectName: local.Name,
-		serviceName: local.Name,
 		branch:      local.Branch,
 		appPort:     fmt.Sprintf("%d", local.AppPort),
 		framework:   local.Framework,
@@ -1065,6 +1135,9 @@ func (m model) updateDatabaseDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 }
 
 func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.monolithForm.relationshipOpen {
+		return m.updateMicroserviceRelationshipEditor(msg)
+	}
 	key := msg.String()
 	code := msg.Key().Code
 	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
@@ -1081,9 +1154,28 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 		m.monolithForm.focus = (m.monolithForm.focus + 1) % fieldCount
 	case code == tea.KeyUp || key == "k":
 		m.monolithForm.focus = (m.monolithForm.focus + fieldCount - 1) % fieldCount
+	case (code == tea.KeyLeft || code == tea.KeyRight) && m.monolithForm.isMicroservices() && m.monolithForm.focus == 0:
+		delta := -1
+		if code == tea.KeyRight {
+			delta = 1
+		}
+		nextModeIndex := wrapIndex(m.monolithForm.sourceModeIndex+delta, 2)
+		if nextModeIndex != m.monolithForm.sourceModeIndex {
+			m.monolithForm.sourceModeIndex = nextModeIndex
+			m.monolithForm.detectedServices = nil
+			m.monolithForm.scannedRepositories = nil
+			m.monolithForm.scanStatus = ""
+			m.message = "Source mode changed. Scan repository sources again."
+		}
 	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
 		m.deleteMonolithicFormRune()
 	case isEnter:
+		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 3 {
+			return m.scanMicroserviceRepository()
+		}
+		if m.monolithForm.isMicroservices() && m.monolithForm.focus == 5 {
+			return m.openMicroserviceRelationshipEditor()
+		}
 		if m.monolithForm.focus == submitIndex {
 			if m.monolithForm.isMicroservices() {
 				return m.submitMicroserviceDeployment()
@@ -1096,6 +1188,136 @@ func (m model) updateMonolithicDeployForm(msg tea.KeyPressMsg) (tea.Model, tea.C
 			m.appendMonolithicFormText(key)
 		}
 	}
+	return m, nil
+}
+
+func (m model) openMicroserviceRelationshipEditor() (tea.Model, tea.Cmd) {
+	if len(m.monolithForm.detectedServices) < 2 {
+		m.message = "Scan at least two services before managing relationships"
+		return m, nil
+	}
+	m.monolithForm.relationshipOpen = true
+	m.monolithForm.relationshipFocus = 0
+	m.monolithForm.relationshipSource = clamp(m.monolithForm.relationshipSource, 0, len(m.monolithForm.detectedServices)-1)
+	m.monolithForm.ensureRelationshipTarget()
+	m.monolithForm.suggestRelationshipType()
+	m.monolithForm.clampRelationshipCurrent()
+	m.message = "Choose how each source service depends on its target"
+	return m, nil
+}
+
+func (m model) updateMicroserviceRelationshipEditor(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
+	fieldCount := 8
+
+	switch {
+	case key == "ctrl+c":
+		return m, tea.Quit
+	case key == "esc" || code == tea.KeyEscape:
+		m.monolithForm.relationshipOpen = false
+		m.message = "Relationship changes kept"
+	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown || key == "j":
+		m.monolithForm.relationshipFocus = (m.monolithForm.relationshipFocus + 1) % fieldCount
+	case code == tea.KeyUp || key == "k":
+		m.monolithForm.relationshipFocus = (m.monolithForm.relationshipFocus + fieldCount - 1) % fieldCount
+	case code == tea.KeyLeft:
+		m.adjustMicroserviceRelationshipChoice(-1)
+	case code == tea.KeyRight:
+		m.adjustMicroserviceRelationshipChoice(1)
+	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
+		if m.monolithForm.relationshipFocus == 3 {
+			m.monolithForm.relationshipCustom = trimLastRune(m.monolithForm.relationshipCustom)
+		}
+	case isEnter:
+		switch m.monolithForm.relationshipFocus {
+		case 4:
+			return m.addMicroserviceRelationship()
+		case 6:
+			return m.removeMicroserviceRelationship()
+		case 7:
+			m.monolithForm.relationshipOpen = false
+			m.message = "Relationship changes kept"
+		default:
+			m.monolithForm.relationshipFocus = (m.monolithForm.relationshipFocus + 1) % fieldCount
+		}
+	default:
+		if m.monolithForm.relationshipFocus == 3 && len(key) == 1 && key >= " " && key <= "~" {
+			m.monolithForm.relationshipCustom += key
+		}
+	}
+	return m, nil
+}
+
+func (m *model) adjustMicroserviceRelationshipChoice(delta int) {
+	form := &m.monolithForm
+	serviceCount := len(form.detectedServices)
+	if serviceCount < 2 {
+		return
+	}
+	switch form.relationshipFocus {
+	case 0:
+		form.relationshipSource = wrapIndex(form.relationshipSource+delta, serviceCount)
+		form.ensureRelationshipTarget()
+		form.suggestRelationshipType()
+		form.clampRelationshipCurrent()
+	case 1:
+		for range serviceCount {
+			form.relationshipTarget = wrapIndex(form.relationshipTarget+delta, serviceCount)
+			if form.relationshipTarget != form.relationshipSource {
+				break
+			}
+		}
+		form.suggestRelationshipType()
+	case 2:
+		form.relationshipType = wrapIndex(form.relationshipType+delta, len(deploy.RelationshipOptions))
+	case 5:
+		dependencies := form.relationshipDependencies()
+		if len(dependencies) > 0 {
+			form.relationshipCurrent = wrapIndex(form.relationshipCurrent+delta, len(dependencies))
+		}
+	}
+}
+
+func (m model) addMicroserviceRelationship() (tea.Model, tea.Cmd) {
+	form := &m.monolithForm
+	option := deploy.RelationshipOptions[clamp(form.relationshipType, 0, len(deploy.RelationshipOptions)-1)]
+	services, err := deploy.ApplyMicroserviceRelationship(
+		form.detectedServices,
+		form.relationshipSource,
+		form.relationshipTarget,
+		option.Value,
+		form.relationshipCustom,
+	)
+	if err != nil {
+		m.message = err.Error()
+		return m, nil
+	}
+	form.detectedServices = services
+	form.clampRelationshipCurrent()
+	source := form.detectedServices[form.relationshipSource].Name
+	target := form.detectedServices[form.relationshipTarget].Name
+	m.message = fmt.Sprintf("Relationship saved: %s -> %s", source, target)
+	return m, nil
+}
+
+func (m model) removeMicroserviceRelationship() (tea.Model, tea.Cmd) {
+	form := &m.monolithForm
+	dependencies := form.relationshipDependencies()
+	if len(dependencies) == 0 {
+		m.message = "This source service has no relationship to remove"
+		return m, nil
+	}
+	target := dependencies[clamp(form.relationshipCurrent, 0, len(dependencies)-1)]
+	services, err := deploy.RemoveMicroserviceRelationship(form.detectedServices, form.relationshipSource, target)
+	if err != nil {
+		m.message = err.Error()
+		return m, nil
+	}
+	form.detectedServices = services
+	form.clampRelationshipCurrent()
+	m.message = "Relationship removed: " + target
 	return m, nil
 }
 
@@ -1138,6 +1360,20 @@ func (m *model) deleteDatabaseFormRune() {
 }
 
 func (m *model) appendMonolithicFormText(text string) {
+	if m.monolithForm.isMicroservices() {
+		switch m.monolithForm.focus {
+		case 1:
+			m.monolithForm.repoURL += text
+			m.monolithForm.repoFullName = deploy.RepoFullNameFromURL(m.monolithForm.repoURL)
+		case 2:
+			if m.monolithForm.sourceMode() == "mono-repo" {
+				m.monolithForm.branch += text
+			}
+		case 4:
+			m.monolithForm.projectName += text
+		}
+		return
+	}
 	switch m.monolithForm.focus {
 	case 0:
 		m.monolithForm.projectName += text
@@ -1164,6 +1400,20 @@ func (m *model) appendMonolithicFormText(text string) {
 }
 
 func (m *model) deleteMonolithicFormRune() {
+	if m.monolithForm.isMicroservices() {
+		switch m.monolithForm.focus {
+		case 1:
+			m.monolithForm.repoURL = trimLastRune(m.monolithForm.repoURL)
+			m.monolithForm.repoFullName = deploy.RepoFullNameFromURL(m.monolithForm.repoURL)
+		case 2:
+			if m.monolithForm.sourceMode() == "mono-repo" {
+				m.monolithForm.branch = trimLastRune(m.monolithForm.branch)
+			}
+		case 4:
+			m.monolithForm.projectName = trimLastRune(m.monolithForm.projectName)
+		}
+		return
+	}
 	switch m.monolithForm.focus {
 	case 0:
 		m.monolithForm.projectName = trimLastRune(m.monolithForm.projectName)
@@ -1358,6 +1608,51 @@ func (m model) submitMonolithicDeployment() (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) scanMicroserviceRepository() (tea.Model, tea.Cmd) {
+	if m.monolithForm.scanLoading {
+		m.message = "Repository scan is already running"
+		return m, nil
+	}
+	repoURL := strings.TrimSpace(m.monolithForm.repoURL)
+	if repoURL == "" {
+		m.message = "Git remote URL is required before scanning"
+		return m, nil
+	}
+	if deploy.RepoFullNameFromURL(repoURL) == "" {
+		m.message = "Use a valid GitHub repository URL before scanning"
+		return m, nil
+	}
+	projectsAPI := m.projectsAPI
+	authClient := m.auth
+	tokens := m.tokens
+	branch := strings.TrimSpace(m.monolithForm.branch)
+	if m.monolithForm.sourceMode() == "multi-repo" {
+		branch = ""
+	}
+	m.monolithForm.scanLoading = true
+	m.monolithForm.scanStatus = "Scanning public repository with backend detector..."
+	m.message = "Scanning public repository for deployable services..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		var err error
+		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err != nil {
+				return microserviceScanResultMsg{tokens: tokens, err: err}
+			}
+		}
+		result, err := projectsAPI.DetectMicroserviceRepository(ctx, tokens.AccessToken, repoURL, branch)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err == nil {
+				result, err = projectsAPI.DetectMicroserviceRepository(ctx, tokens.AccessToken, repoURL, branch)
+			}
+		}
+		return microserviceScanResultMsg{tokens: tokens, result: result, err: err}
+	}
+}
+
 func (m model) submitMicroserviceDeployment() (tea.Model, tea.Cmd) {
 	input, err := m.monolithForm.microserviceInput()
 	if err != nil {
@@ -1367,9 +1662,9 @@ func (m model) submitMicroserviceDeployment() (tea.Model, tea.Cmd) {
 	projectsAPI := m.projectsAPI
 	authClient := m.auth
 	tokens := m.tokens
-	m.message = "Submitting microservices deployment..."
+	m.message = "Checking Git remotes before deployment..."
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		var err error
 		if tokens.ExpiresSoon(time.Now()) && tokens.CanRefresh() {
@@ -1377,6 +1672,16 @@ func (m model) submitMicroserviceDeployment() (tea.Model, tea.Cmd) {
 			if err != nil {
 				return microserviceDeployResultMsg{tokens: tokens, err: err}
 			}
+		}
+		err = projectsAPI.ValidateMicroserviceRepositories(ctx, tokens.AccessToken, input.Services)
+		if api.IsUnauthorized(err) && tokens.CanRefresh() {
+			tokens, err = authClient.Refresh(ctx, tokens)
+			if err == nil {
+				err = projectsAPI.ValidateMicroserviceRepositories(ctx, tokens.AccessToken, input.Services)
+			}
+		}
+		if err != nil {
+			return microserviceDeployResultMsg{tokens: tokens, err: err}
 		}
 		deployment, err := projectsAPI.CreateMicroserviceDeployment(ctx, tokens.AccessToken, input)
 		if api.IsUnauthorized(err) && tokens.CanRefresh() {
@@ -1767,46 +2072,43 @@ func (f monolithicDeployForm) input() (api.CreateMonolithicDeploymentInput, erro
 
 func (f monolithicDeployForm) microserviceInput() (api.CreateMicroserviceDeploymentInput, error) {
 	projectName := strings.TrimSpace(f.projectName)
-	serviceName := strings.TrimSpace(f.serviceName)
-	repoURL := strings.TrimSpace(f.repoURL)
 	branch := strings.TrimSpace(f.branch)
-	repoFullName := strings.TrimSpace(f.repoFullName)
+	if f.scanLoading {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Wait for the repository scan to finish")
+	}
 	if projectName == "" {
 		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Project name is required")
 	}
-	if serviceName == "" {
-		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Service name is required")
+	if len(f.detectedServices) == 0 {
+		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Scan at least one repository before deploying")
 	}
-	if repoURL == "" {
-		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Git remote URL is required")
+	serviceNames := map[string]bool{}
+	for _, service := range f.detectedServices {
+		name := strings.ToLower(strings.TrimSpace(service.Name))
+		if serviceNames[name] {
+			return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Detected services contain duplicate name %q; choose repositories with unique service names", service.Name)
+		}
+		serviceNames[name] = true
 	}
-	if repoFullName == "" {
-		return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Git remote must include owner and repository")
+	for _, service := range f.detectedServices {
+		for _, dependency := range service.DependsOn {
+			target := strings.ToLower(strings.TrimSpace(dependency))
+			if target == strings.ToLower(strings.TrimSpace(service.Name)) {
+				return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Service %q cannot depend on itself", service.Name)
+			}
+			if !serviceNames[target] {
+				return api.CreateMicroserviceDeploymentInput{}, fmt.Errorf("Service %q depends on unknown service %q; scan that repository or remove the relationship", service.Name, dependency)
+			}
+		}
 	}
 	if branch == "" {
 		branch = "main"
 	}
-	serviceType := strings.ToLower(strings.TrimSpace(f.serviceType))
-	if serviceType == "" {
-		serviceType = "backend"
-	}
-	framework := strings.TrimSpace(f.framework)
-	exposePublic := serviceType == "gateway" || serviceType == "frontend" || strings.EqualFold(framework, "Next.js") || strings.EqualFold(framework, "nextjs")
+	services := normalizeMicroservicePrimaryPublic(f.detectedServices)
 	return api.CreateMicroserviceDeploymentInput{
 		ProjectName: projectName,
 		Branch:      branch,
-		Services: []api.CreateMicroserviceServiceInput{{
-			Name:          serviceName,
-			RepoURL:       repoURL,
-			RepoFullName:  repoFullName,
-			RepoProvider:  "github",
-			Branch:        branch,
-			AppPort:       deploy.ParsePositiveInt(f.appPort, 3000),
-			ServiceType:   serviceType,
-			Framework:     framework,
-			ExposePublic:  exposePublic,
-			PrimaryPublic: exposePublic,
-		}},
+		Services:    services,
 	}, nil
 }
 
@@ -1823,9 +2125,118 @@ func (f monolithicDeployForm) title() string {
 
 func (f monolithicDeployForm) fieldCount() int {
 	if f.isMicroservices() {
-		return 8
+		return 7
 	}
 	return 5
+}
+
+func (f *monolithicDeployForm) ensureRelationshipTarget() {
+	serviceCount := len(f.detectedServices)
+	if serviceCount < 2 {
+		f.relationshipTarget = 0
+		return
+	}
+	f.relationshipSource = clamp(f.relationshipSource, 0, serviceCount-1)
+	f.relationshipTarget = clamp(f.relationshipTarget, 0, serviceCount-1)
+	if f.relationshipTarget == f.relationshipSource {
+		f.relationshipTarget = wrapIndex(f.relationshipSource+1, serviceCount)
+	}
+}
+
+func (f *monolithicDeployForm) suggestRelationshipType() {
+	if len(f.detectedServices) < 2 {
+		f.relationshipType = 0
+		return
+	}
+	f.ensureRelationshipTarget()
+	kind := deploy.SuggestRelationshipKind(
+		f.detectedServices[f.relationshipSource],
+		f.detectedServices[f.relationshipTarget],
+	)
+	f.relationshipType = deploy.RelationshipOptionIndex(kind)
+}
+
+func (f monolithicDeployForm) relationshipDependencies() []string {
+	if f.relationshipSource < 0 || f.relationshipSource >= len(f.detectedServices) {
+		return nil
+	}
+	return f.detectedServices[f.relationshipSource].DependsOn
+}
+
+func (f *monolithicDeployForm) clampRelationshipCurrent() {
+	dependencies := f.relationshipDependencies()
+	f.relationshipCurrent = clamp(f.relationshipCurrent, 0, max(len(dependencies)-1, 0))
+}
+
+func (f monolithicDeployForm) sourceMode() string {
+	if f.sourceModeIndex == 1 {
+		return "multi-repo"
+	}
+	return "mono-repo"
+}
+
+func (f monolithicDeployForm) sourceModeLabel() string {
+	if f.sourceMode() == "multi-repo" {
+		return "Multi Repo"
+	}
+	return "Mono Repo"
+}
+
+func mergeDetectedMicroserviceServices(current, detected []api.CreateMicroserviceServiceInput) []api.CreateMicroserviceServiceInput {
+	merged := append([]api.CreateMicroserviceServiceInput(nil), current...)
+	seen := make(map[string]bool, len(merged))
+	for _, service := range merged {
+		seen[microserviceServiceKey(service)] = true
+	}
+	for _, service := range detected {
+		key := microserviceServiceKey(service)
+		if seen[key] {
+			continue
+		}
+		merged = append(merged, service)
+		seen[key] = true
+	}
+	return merged
+}
+
+func microserviceServiceKey(service api.CreateMicroserviceServiceInput) string {
+	return strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(service.RepoFullName),
+		strings.TrimSpace(service.Path),
+		strings.TrimSpace(service.Name),
+	}, "|"))
+}
+
+func normalizeMicroservicePrimaryPublic(services []api.CreateMicroserviceServiceInput) []api.CreateMicroserviceServiceInput {
+	normalized := append([]api.CreateMicroserviceServiceInput(nil), services...)
+	foundPrimary := false
+	for index := range normalized {
+		if !normalized[index].ExposePublic {
+			normalized[index].PrimaryPublic = false
+			continue
+		}
+		if normalized[index].PrimaryPublic && !foundPrimary {
+			foundPrimary = true
+			continue
+		}
+		if normalized[index].PrimaryPublic {
+			normalized[index].PrimaryPublic = false
+		}
+	}
+	return normalized
+}
+
+func appendUniqueText(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	for _, current := range values {
+		if strings.EqualFold(strings.TrimSpace(current), value) {
+			return values
+		}
+	}
+	if value == "" {
+		return values
+	}
+	return append(values, value)
 }
 
 func (m model) startLoginIfAvailable() (tea.Model, tea.Cmd) {
@@ -2030,7 +2441,8 @@ func (m model) openMicroservicesDeployForm() model {
 	m.dbFormOpen = false
 	m.monolithFormOpen = true
 	m.monolithForm = newMicroservicesDeployForm()
-	m.message = "Deploy one microservice now. Add more services later from the project workspace."
+	m.monolithForm.scanStatus = "Public GitHub repositories only. No GitHub token is used."
+	m.message = "Choose Mono Repo or Multi Repo, then scan a public GitHub remote."
 	return m
 }
 
@@ -2234,7 +2646,7 @@ func (m model) fetchJenkinsDeploymentStreamCmd(delay time.Duration) tea.Cmd {
 	}
 }
 
-func monolithicDeploymentLogRecord(deployment api.MonolithicDeploymentRecord) api.DatabaseDeploymentRecord {
+func jenkinsDeploymentLogRecord(deployment api.MonolithicDeploymentRecord, deploymentMode string) api.DatabaseDeploymentRecord {
 	status := firstNonEmpty(deployment.Status, "QUEUED")
 	if !api.DatabaseDeploymentTerminal(status) {
 		status = "QUEUED"
@@ -2246,12 +2658,19 @@ func monolithicDeploymentLogRecord(deployment api.MonolithicDeploymentRecord) ap
 	return api.DatabaseDeploymentRecord{
 		ID:             deployment.ProjectID,
 		ProjectName:    deployment.Name,
-		DeploymentMode: "monolith",
+		DeploymentMode: deploymentMode,
 		Status:         status,
 		StatusMessage:  initialLog,
 		StatusLog:      initialLog,
 		DeployURL:      deployment.DeployURL,
 	}
+}
+
+func jenkinsDeploymentKind(deploymentMode string) string {
+	if deploymentMode == "microservices" {
+		return "Microservices"
+	}
+	return "Monolithic"
 }
 
 func (m model) downloadClusterCertificateCmd(destination string, overwrite bool) tea.Cmd {

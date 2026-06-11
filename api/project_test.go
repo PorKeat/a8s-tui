@@ -475,6 +475,7 @@ func TestCreateMonolithicDeployment(t *testing.T) {
 }
 
 func TestCreateMicroserviceDeployment(t *testing.T) {
+	var sawWorkspace bool
 	var sawProfile bool
 	var sawCreate bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -482,6 +483,9 @@ func TestCreateMicroserviceDeployment(t *testing.T) {
 			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
 		}
 		switch r.URL.Path {
+		case "/api/v1/workspaces/bootstrap":
+			sawWorkspace = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"onboarded": true, "namespace": "workspace-team"})
 		case "/api/v1/profile/me":
 			sawProfile = true
 			_ = json.NewEncoder(w).Encode(map[string]any{"userId": "user-1"})
@@ -507,6 +511,18 @@ func TestCreateMicroserviceDeployment(t *testing.T) {
 			}
 			if service["serviceType"] != "backend" || service["repoProvider"] != "github" || service["primaryPublic"] != true {
 				t.Fatalf("service payload = %#v", service)
+			}
+			dependsOn, ok := service["dependsOn"].([]any)
+			if !ok || len(dependsOn) != 1 || dependsOn[0] != "eureka-server" {
+				t.Fatalf("dependsOn = %#v", service["dependsOn"])
+			}
+			relationships, ok := service["relationships"].([]any)
+			if !ok || len(relationships) != 1 {
+				t.Fatalf("relationships = %#v", service["relationships"])
+			}
+			relationship, ok := relationships[0].(map[string]any)
+			if !ok || relationship["name"] != "EUREKA_URL" || relationship["value"] != "eureka-server" {
+				t.Fatalf("relationship = %#v", relationships[0])
 			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -537,13 +553,15 @@ func TestCreateMicroserviceDeployment(t *testing.T) {
 			Framework:     "Go",
 			ExposePublic:  true,
 			PrimaryPublic: true,
+			Relationships: []MicroserviceRelationInput{{Name: "EUREKA_URL", Value: "eureka-server"}},
+			DependsOn:     []string{"eureka-server"},
 		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sawProfile || !sawCreate {
-		t.Fatalf("expected profile and create calls")
+	if !sawWorkspace || !sawProfile || !sawCreate {
+		t.Fatalf("expected workspace, profile, and create calls")
 	}
 	if deployment.ProjectID != "project-1" || deployment.QueueItemID != 43 || deployment.JenkinsJobName != "deploy-microservices" {
 		t.Fatalf("deployment = %#v", deployment)

@@ -50,6 +50,7 @@ go run main.go
 - **Monitoring**: View namespace health, resource usage, pod status, and per-project metrics from the backend monitoring API.
 - **Live Deployment Logs**: Watch deployment logs stream directly to your terminal while new workloads are created.
 - **Customizable UI**: Fully integrated themes (Dark, Light, Orange, Green, Ocean, Rose) and support for icon-less environments (set `A8S_NO_ICONS=true`).
+- **Light by default**: The launcher, dashboard, forms, logs, dialogs, status colors, and monitoring charts all start with the complete light palette.
 
 ## Keyboard Shortcuts
 

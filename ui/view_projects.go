@@ -86,7 +86,7 @@ func (m model) renderProjectDeleteConfirmation(width, height int) []string {
 	muted := mainMutedStyle(colorBgCard)
 	danger := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorBgCard)).
-		Foreground(lipgloss.Color("#ff8787")).
+		Foreground(lipgloss.Color(colorError)).
 		Bold(true)
 	input := m.deleteConfirmText
 	emptyInput := input == ""
@@ -226,15 +226,15 @@ func projectDialogButton(label string, selected, danger bool) string {
 	bg := colorBgPill
 	fg := colorText
 	if danger {
-		bg = "#3a2424"
-		fg = "#ff8787"
+		bg = colorBgDanger
+		fg = colorError
 	}
 	if selected {
 		if danger {
-			bg = "#5a2b2b"
+			bg = colorBgDangerActive
 		} else {
 			bg = colorPrimary
-			fg = colorTitle
+			fg = colorOnPrimary
 		}
 		label = "> " + label
 	} else {
@@ -503,11 +503,11 @@ func statusPill(status, bg string) string {
 	color := colorMuted
 	switch strings.ToUpper(strings.TrimSpace(status)) {
 	case "READY", "RUNNING", "DEPLOYED", "HEALTHY", "SUCCESS", "SUCCEEDED":
-		color = "#77f27f"
+		color = colorSuccess
 	case "PENDING", "STARTING", "PROVISIONING", "DEPLOYING":
-		color = "#ffe066"
+		color = colorWarning
 	case "FAILED", "ERROR", "UNHEALTHY":
-		color = "#ff8787"
+		color = colorError
 	}
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
@@ -541,9 +541,9 @@ func projectIconColor(project api.LiveProject) string {
 	case "database", "dbcluster":
 		return colorPrimary
 	case "microservices":
-		return "#77f27f"
+		return colorSuccess
 	case "monolith":
-		return "#7aaeff"
+		return colorInfo
 	default:
 		return colorMuted
 	}

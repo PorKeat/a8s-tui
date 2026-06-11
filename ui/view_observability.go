@@ -137,7 +137,7 @@ func (m model) modernMonitoringDetail(width, height int) []string {
 	project, ok := m.selectedMonitoringProject()
 	lines := []string{
 		modernTitleLine("RESOURCE_MONITOR", width),
-		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color("#67e8f9")).Bold(true).Render("● namespace resources"), width, colorBgMain),
+		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(colorInfo)).Bold(true).Render("● namespace resources"), width, colorBgMain),
 		modernLine("", width, colorBgMain),
 		modernRule(width),
 		modernLine("", width, colorBgMain),
@@ -179,10 +179,10 @@ func modernResourceMonitorLines(metrics api.MonitoringNamespaceMetrics, width in
 	storagePct := resourcePercent(metrics.StorageRequestsUsed, metrics.StorageRequestsLimit, 0, 0)
 	networkPct := networkPercent(metrics.NetworkReceiveBytesPerSecond, metrics.NetworkTransmitBytesPerSecond)
 	items := []resourceMonitorItem{
-		{label: "CPU CORE", value: cpuPct, color: "#67e8f9"},
-		{label: "MEMORY (RAM)", value: memPct, color: "#f5ff8a"},
-		{label: "NVME STORAGE", value: storagePct, color: "#ff5f5f"},
-		{label: "NETWORK UP/DOWN", value: networkPct, color: "#50fa7b"},
+		{label: "CPU CORE", value: cpuPct, color: colorInfo},
+		{label: "MEMORY (RAM)", value: memPct, color: colorWarning},
+		{label: "NVME STORAGE", value: storagePct, color: colorError},
+		{label: "NETWORK UP/DOWN", value: networkPct, color: colorSuccess},
 	}
 	for index, item := range items {
 		if index > 0 {
@@ -223,7 +223,7 @@ func modernResourceBar(item resourceMonitorItem, width int) []string {
 		Render(strings.Repeat("█", filled)) +
 		lipgloss.NewStyle().
 			Background(lipgloss.Color(colorBgMain)).
-			Foreground(lipgloss.Color("#333333")).
+			Foreground(lipgloss.Color(colorTrack)).
 			Render(strings.Repeat("█", empty))
 	return []string{
 		modernLine(header, width, colorBgMain),
@@ -283,11 +283,11 @@ func modernLogLine(line api.LogLine, width int) string {
 func podPhaseColor(phase string) string {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
 	case "running", "succeeded":
-		return "#4ade80"
+		return colorSuccess
 	case "pending":
-		return "#facc15"
+		return colorWarning
 	case "failed":
-		return "#fb7185"
+		return colorError
 	default:
 		return colorMuted
 	}
@@ -296,11 +296,11 @@ func podPhaseColor(phase string) string {
 func logLevelColor(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "error":
-		return "#fb7185"
+		return colorError
 	case "warn":
-		return "#facc15"
+		return colorWarning
 	case "success":
-		return "#4ade80"
+		return colorSuccess
 	default:
 		return colorMuted
 	}
@@ -325,11 +325,11 @@ func monitoringHealthLabel(project api.MonitoringProjectMetrics) string {
 func monitoringHealthColor(project api.MonitoringProjectMetrics) string {
 	switch monitoringHealthLabel(project) {
 	case "healthy":
-		return "#4ade80"
+		return colorSuccess
 	case "attention":
-		return "#fb7185"
+		return colorError
 	case "starting":
-		return "#facc15"
+		return colorWarning
 	default:
 		return colorPrimary
 	}
