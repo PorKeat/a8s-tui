@@ -13,82 +13,300 @@ import (
 
 func (m model) modernImageScannerList(width, height int) []string {
 	lines := []string{
-		modernTitleLine("Image Scanner", width),
-		modernLine(modernImageScannerModeChips(m.scannerMode), width, colorBgMain),
-		modernLine("", width, colorBgMain),
+		modernTableHeader("SOURCE", "DATA", width),
 		modernRule(width),
 	}
-	if m.scannerLoading {
-		lines = append(lines, modernMutedLine("Loading scanner workspace...", width))
-		return modernCropLines(lines, width, height)
+	sources := []struct {
+		label string
+		state string
+	}{
+		{"Harbor", fmt.Sprintf("%d images", len(m.scannerImages))},
+		{"External", "pull & scan"},
+		{"Git", "build & scan"},
+		{"History", fmt.Sprintf("%d scans", len(m.scannerScans))},
 	}
-	switch m.scannerMode {
-	case 1:
-		if len(m.scannerScans) == 0 {
-			lines = append(lines, modernMutedLine("No scan history yet", width))
-		}
-		for index, scan := range m.scannerScans {
-			lines = append(lines, modernImageScanHistoryRow(scan, width, index == m.scannerHistoryCursor))
-		}
-	default:
-		if len(m.scannerImages) == 0 {
-			lines = append(lines, modernMutedLine("No deployed images found", width))
-		}
-		for index, image := range m.scannerImages {
-			lines = append(lines, modernImageScannerImageRow(image, width, index == m.scannerCursor))
-		}
+	for index, source := range sources {
+		lines = append(lines, modernImageScannerSourceRow(source.label, source.state, width, index == m.scannerMode)...)
 	}
 	lines = append(lines,
 		modernLine("", width, colorBgMain),
-		modernRule(width),
-		modernLine("", width, colorBgMain),
-		modernMutedLine("enter scans or opens selected history", width),
-		modernMutedLine("left/right switches scan and history", width),
+		modernMutedLine("up/down selects source · enter opens", width),
+		modernMutedLine("esc returns here from the right pane", width),
 	)
 	return modernCropLines(lines, width, height)
 }
 
 func (m model) modernImageScannerDetail(width, height int) []string {
-	if m.scannerMode == 1 {
-		if scan, ok := m.selectedScannerHistory(); ok {
-			return m.modernImageScanResult(scan, width, height)
-		}
-	}
-	if m.scannerMode == 0 && m.scannerActiveScan.ID != "" {
-		return m.modernImageScanResult(m.scannerActiveScan, width, height)
-	}
-	image, ok := m.selectedScannerImage()
-	if !ok {
-		lines := []string{
-			modernTitleLine("Image Scanner", width),
-			modernMutedLine("Open this section to load deployed images.", width),
+	if m.scannerLoading && m.scannerActiveScan.ID == "" {
+		return modernCropLines([]string{
+			modernTitleLine("Starting scan", width),
+			modernLine(mainPrimaryStyle(colorBgMain).Render(m.spinner.View()+" Sending "+scannerSourceLabel(m.scannerMode)+" request"), width, colorBgMain),
 			modernLine("", width, colorBgMain),
 			modernRule(width),
 			modernLine("", width, colorBgMain),
-			modernMutedLine("Press r to refresh images and scan history.", width),
-		}
-		return modernCropLines(lines, width, height)
+			modernMutedLine("A8S is validating the source and starting the Jenkins Trivy job.", width),
+			modernMutedLine("The status and findings will appear here automatically.", width),
+		}, width, height)
 	}
+	if m.scannerActiveScan.ID != "" {
+		return m.modernImageScanResult(m.scannerActiveScan, width, height)
+	}
+	if m.scannerMode == 1 {
+		return m.modernExternalScannerWorkspace(width, height)
+	}
+	if m.scannerMode == 2 {
+		return m.modernGitScannerWorkspace(width, height)
+	}
+	if m.scannerMode == 3 {
+		return m.modernScannerHistoryWorkspace(width, height)
+	}
+	return m.modernHarborScannerWorkspace(width, height)
+}
+
+func (m model) modernHarborScannerWorkspace(width, height int) []string {
 	stats := imageScannerStats(m.scannerImages)
 	lines := []string{
-		modernTitleLine(imageScannerImageLabel(image), width),
+		modernTitleLine("Harbor images", width),
 		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(colorPrimary)).Bold(true).Render("● harbor image"), width, colorBgMain),
 		modernLine("", width, colorBgMain),
 		modernRule(width),
 		modernLine("", width, colorBgMain),
 		modernScannerMetricRow(stats, width),
 		modernLine("", width, colorBgMain),
-		modernFieldLine("Repository", image.Repository, width),
-		modernFieldLine("Image", imageScannerImageLabel(image), width),
-		modernFieldLine("Runtime", firstNonEmpty(image.Distro, "linux")+" · "+firstNonEmpty(image.Architecture, "amd64"), width),
-		modernFieldLine("Size", image.SizeLabel, width),
-		modernFieldLine("Last scan", imageLastScanLabel(image), width),
+		modernHeading("Deployed images", width),
+	}
+	if len(m.scannerImages) == 0 {
+		lines = append(lines, modernMutedLine("No deployed images found. Press r to refresh.", width))
+	} else {
+		start, end := scannerWindow(len(m.scannerImages), m.scannerCursor, 6)
+		for index := start; index < end; index++ {
+			lines = append(lines, modernImageScannerImageRow(m.scannerImages[index], width, index == m.scannerCursor))
+		}
+	}
+	lines = append(lines,
 		modernLine("", width, colorBgMain),
 		modernRule(width),
 		modernLine("", width, colorBgMain),
-		modernMutedLine("Press enter to scan this image.", width),
+	)
+	if image, ok := m.selectedScannerImage(); ok {
+		lines = append(lines,
+			modernHeading("Selected image", width),
+			modernFieldLine("Repository", image.Repository, width),
+			modernFieldLine("Image", imageScannerImageLabel(image), width),
+			modernFieldLine("Runtime", firstNonEmpty(image.Distro, "linux")+" · "+firstNonEmpty(image.Architecture, "amd64"), width),
+			modernFieldLine("Size", image.SizeLabel, width),
+			modernFieldLine("Last scan", imageLastScanLabel(image), width),
+			modernLine("", width, colorBgMain),
+			modernMutedLine("Press enter to scan this image.", width),
+		)
 	}
 	return modernCropLines(lines, width, height)
+}
+
+func (m model) modernExternalScannerWorkspace(width, height int) []string {
+	lines := []string{
+		modernTitleLine("External registry", width),
+		modernLine(mainPrimaryStyle(colorBgMain).Render("● pull and scan"), width, colorBgMain),
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+	}
+	lines = append(lines, m.modernExternalScannerForm(width)...)
+	lines = append(lines,
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+		modernHeading("Preview", width),
+		modernFieldLine("Full image", firstNonEmpty(externalImageReference(m.scannerForm.externalRegistry, m.scannerForm.externalName, m.scannerForm.externalTag), "enter registry and image name"), width),
+		modernFieldLine("Access", scannerAccessLabel(m.scannerForm.externalPrivate), width),
+		modernLine("", width, colorBgMain),
+		modernMutedLine("Use registry hosts such as docker.io or ghcr.io, not image web pages.", width),
+	)
+	return modernCropLines(lines, width, height)
+}
+
+func (m model) modernGitScannerWorkspace(width, height int) []string {
+	lines := []string{
+		modernTitleLine("Git repository", width),
+		modernLine(mainPrimaryStyle(colorBgMain).Render("● build and scan"), width, colorBgMain),
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+	}
+	lines = append(lines, m.modernGitScannerForm(width)...)
+	lines = append(lines,
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+		modernHeading("Build preview", width),
+		modernFieldLine("Repository", firstNonEmpty(m.scannerForm.gitRepository, "enter repository URL"), width),
+		modernFieldLine("Build", "main · Dockerfile · context .", width),
+		modernFieldLine("Target image", gitRepositoryImageName(m.scannerForm.gitRepository), width),
+		modernFieldLine("Access", scannerAccessLabel(m.scannerForm.gitPrivate), width),
+		modernLine("", width, colorBgMain),
+		modernMutedLine("Clones, builds, and scans the resulting image.", width),
+	)
+	return modernCropLines(lines, width, height)
+}
+
+func (m model) modernScannerHistoryWorkspace(width, height int) []string {
+	lines := []string{
+		modernTitleLine("Scan history", width),
+		modernLine(mainPrimaryStyle(colorBgMain).Render(fmt.Sprintf("● %d scans", len(m.scannerScans))), width, colorBgMain),
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+	}
+	if len(m.scannerScans) == 0 {
+		lines = append(lines, modernMutedLine("No scan history yet.", width))
+		return modernCropLines(lines, width, height)
+	}
+	start, end := scannerWindow(len(m.scannerScans), m.scannerHistoryCursor, 7)
+	for index := start; index < end; index++ {
+		lines = append(lines, modernImageScanHistoryRow(m.scannerScans[index], width, index == m.scannerHistoryCursor))
+	}
+	lines = append(lines,
+		modernLine("", width, colorBgMain),
+		modernRule(width),
+		modernLine("", width, colorBgMain),
+		modernHeading("Selected scan", width),
+	)
+	if scan, ok := m.selectedScannerHistory(); ok {
+		counts := api.ImageScanSeverityCounts(scan.Vulnerabilities)
+		lines = append(lines,
+			modernFieldLine("Image", imageScanTitle(scan), width),
+			modernFieldLine("Status", firstNonEmpty(scan.Status, "PENDING"), width),
+			modernFieldLine("Findings", fmt.Sprintf("%d critical · %d high · %d total", counts["CRITICAL"], counts["HIGH"], len(scan.Vulnerabilities)), width),
+			modernLine("", width, colorBgMain),
+			modernMutedLine("Press enter to open the full report.", width),
+		)
+	}
+	return modernCropLines(lines, width, height)
+}
+
+func (m model) modernExternalScannerForm(width int) []string {
+	form := m.scannerForm
+	lines := []string{
+		modernHeading("External image", width),
+		modernMutedLine("Enter a registry host and image path. Credentials stay in memory.", width),
+		modernLine("", width, colorBgMain),
+		modernScannerFormField("Registry URL", form.externalRegistry, "docker.io (not hub.docker.com image page)", width, form.focus == 0, false),
+		modernScannerFormField("Image name", form.externalName, "library/nginx", width, form.focus == 1, false),
+		modernScannerFormField("Image tag", form.externalTag, "latest", width, form.focus == 2, false),
+		modernScannerFormChoice("Private registry", form.externalPrivate, width, form.focus == 3),
+	}
+	if form.externalPrivate {
+		lines = append(lines,
+			modernScannerFormField("Username", form.externalUsername, "registry user", width, form.focus == 4, false),
+			modernScannerFormField("Password", form.externalPassword, "required", width, form.focus == 5, true),
+		)
+	}
+	lines = append(lines, modernScannerFormAction("Pull & Scan", width, form.focus == m.imageScannerFormFieldCount()-1))
+	return lines
+}
+
+func (m model) modernGitScannerForm(width int) []string {
+	form := m.scannerForm
+	lines := []string{
+		modernHeading("Git build", width),
+		modernMutedLine("Enter a repository URL. A8S builds main/Dockerfile, then scans it.", width),
+		modernLine("", width, colorBgMain),
+		modernScannerFormField("Repository URL", form.gitRepository, "https://github.com/user/repository.git", width, form.focus == 0, false),
+		modernScannerFormChoice("Private repository", form.gitPrivate, width, form.focus == 1),
+	}
+	if form.gitPrivate {
+		lines = append(lines,
+			modernScannerFormField("Username", form.gitUsername, "Git user", width, form.focus == 2, false),
+			modernScannerFormField("Token", form.gitPassword, "required", width, form.focus == 3, true),
+		)
+	}
+	lines = append(lines, modernScannerFormAction("Build & Scan", width, form.focus == m.imageScannerFormFieldCount()-1))
+	return lines
+}
+
+func modernScannerFormField(label, value, placeholder string, width int, active, secret bool) string {
+	rowBg := colorBgPill
+	if active {
+		rowBg = colorBgActive
+	}
+	display := strings.TrimSpace(value)
+	valueStyle := mainBodyStyle(rowBg)
+	if display == "" {
+		display = placeholder
+		valueStyle = mainMutedStyle(rowBg)
+	} else if secret {
+		display = strings.Repeat("•", len([]rune(display)))
+	}
+	labelText := mainMutedStyle(rowBg).Render(pad(label, min(18, max(width/3, 10))))
+	prefix := "  "
+	if active {
+		prefix = "> "
+	}
+	content := mainPrimaryStyle(rowBg).Render(prefix) + labelText + valueStyle.Render(truncatePlain(display, max(width-visibleLen(labelText)-6, 8)))
+	return lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(pad(content, width))
+}
+
+func modernScannerFormChoice(label string, enabled bool, width int, active bool) string {
+	value := "public"
+	if enabled {
+		value = "private"
+	}
+	return modernScannerFormField(label, value, "", width, active, false)
+}
+
+func modernScannerFormAction(label string, width int, active bool) string {
+	rowBg := colorBgPill
+	style := mainBodyStyle(rowBg)
+	prefix := "  "
+	if active {
+		rowBg = colorPrimary
+		style = lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Foreground(lipgloss.Color(colorOnPrimary)).Bold(true)
+		prefix = "> "
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(pad(style.Render(prefix+label), width))
+}
+
+func scannerAccessLabel(private bool) string {
+	if private {
+		return "private · credentials kept in memory"
+	}
+	return "public"
+}
+
+func modernImageScannerSourceRow(label, state string, width int, active bool) []string {
+	rowBg := colorBgMain
+	labelStyle := mainBodyStyle(rowBg)
+	stateStyle := mainMutedStyle(rowBg)
+	border := colorBorder
+	prefix := "  "
+	if active {
+		border = colorPrimary
+		labelStyle = mainTitleStyle(rowBg)
+		stateStyle = mainPrimaryStyle(rowBg)
+		prefix = "> "
+	}
+	boxWidth := max(width-4, 12)
+	contentWidth := max(boxWidth-4, 8)
+	state = truncatePlain(state, max(contentWidth-8, 4))
+	labelWidth := max(contentWidth-visibleLen(state)-1, 4)
+	name := labelStyle.Render(prefix + truncatePlain(label, labelWidth))
+	meta := stateStyle.Render(truncatePlain(state, max(contentWidth-visibleLen(name)-1, 4)))
+	line := name + spaces(max(contentWidth-visibleLen(name)-visibleLen(meta), 1)) + meta
+	box := lipgloss.NewStyle().
+		Background(lipgloss.Color(rowBg)).
+		Foreground(lipgloss.Color(colorText)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(border)).
+		BorderBackground(lipgloss.Color(colorBgMain)).
+		Padding(0, 1).
+		Width(boxWidth).
+		Render(line)
+	rendered := strings.Split(box, "\n")
+	lines := make([]string, 0, len(rendered))
+	for _, line := range rendered {
+		lines = append(lines, modernLine(line, width, colorBgMain))
+	}
+	return lines
 }
 
 func modernImageScannerImageRow(image api.ImageScannerImage, width int, active bool) string {
@@ -108,6 +326,16 @@ func modernImageScannerImageRow(image api.ImageScannerImage, width int, active b
 	meta := metaStyle.Render(vulns)
 	line := name + spaces(max(width-visibleLen(name)-visibleLen(meta), 1)) + meta
 	return lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(pad(line, width))
+}
+
+func scannerWindow(total, cursor, limit int) (int, int) {
+	if total <= 0 || limit <= 0 {
+		return 0, 0
+	}
+	limit = min(limit, total)
+	cursor = clamp(cursor, 0, total-1)
+	start := clamp(cursor-limit/2, 0, total-limit)
+	return start, start + limit
 }
 
 func modernImageScanHistoryRow(scan api.ImageScanJob, width int, active bool) string {
@@ -138,18 +366,18 @@ func (m model) modernImageScanResult(scan api.ImageScanJob, width, height int) [
 	}
 	lines := []string{
 		modernTitleLine(imageScanTitle(scan), width),
-		modernLine(lipgloss.NewStyle().Background(lipgloss.Color(colorBgMain)).Foreground(lipgloss.Color(statusColor(status))).Bold(true).Render("● "+strings.ToLower(status)), width, colorBgMain),
+		modernScanStatusBanner(scan, width),
 		modernLine("", width, colorBgMain),
 		modernRule(width),
 		modernLine("", width, colorBgMain),
 		modernScanSeveritySummary(counts, len(scan.Vulnerabilities), width),
 		modernLine("", width, colorBgMain),
-		modernFieldLine("Reference", firstNonEmpty(scan.FullReference, "n/a"), width),
 		modernFieldLine("Scanner", firstNonEmpty(scan.ScannerName, "Trivy"), width),
 		modernFieldLine("Progress", fmt.Sprintf("%d%%", progress), width),
 	}
+	lines = append(lines, modernWrappedFieldLines("Reference", firstNonEmpty(scan.FullReference, "n/a"), width)...)
 	if scan.StatusMessage != "" {
-		lines = append(lines, modernFieldLine("Message", scan.StatusMessage, width))
+		lines = append(lines, modernWrappedFieldLines("Message", scan.StatusMessage, width)...)
 	}
 	lines = append(lines,
 		modernLine("", width, colorBgMain),
@@ -172,10 +400,43 @@ func (m model) modernImageScanResult(scan api.ImageScanJob, width, height int) [
 	for _, finding := range topImageScanFindings(scan.Vulnerabilities, 6) {
 		lines = append(lines, modernImageScanFindingLine(finding, width))
 	}
-	if len(scan.Vulnerabilities) == 0 {
+	if len(scan.Vulnerabilities) == 0 && api.ImageScanFailed(status) {
+		lines = append(lines, modernLine(lipgloss.NewStyle().
+			Background(lipgloss.Color(colorBgMain)).
+			Foreground(lipgloss.Color(colorError)).
+			Bold(true).
+			Render("Scan stopped before Trivy returned findings."), width, colorBgMain))
+	} else if len(scan.Vulnerabilities) == 0 {
 		lines = append(lines, modernMutedLine("No vulnerabilities returned yet.", width))
 	}
+	lines = append(lines,
+		modernLine("", width, colorBgMain),
+		modernMutedLine("n new scan  ·  x force rescan  ·  right history", width),
+	)
 	return modernCropLines(lines, width, height)
+}
+
+func modernScanStatusBanner(scan api.ImageScanJob, width int) string {
+	status := strings.ToUpper(firstNonEmpty(scan.Status, "PENDING"))
+	message := strings.TrimSpace(scan.StatusMessage)
+	if message == "" {
+		switch {
+		case api.ImageScanFailed(status):
+			message = "Scan failed before findings were produced"
+		case api.ImageScanTerminal(status):
+			message = "Scan complete"
+		default:
+			message = "Scan is running"
+		}
+	}
+	bg := colorBgPill
+	if api.ImageScanFailed(status) {
+		bg = colorBgDanger
+	}
+	statusStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg)).Foreground(lipgloss.Color(statusColor(status))).Bold(true)
+	messageStyle := lipgloss.NewStyle().Background(lipgloss.Color(bg)).Foreground(lipgloss.Color(colorText))
+	content := statusStyle.Render("● "+strings.ToLower(status)) + messageStyle.Render("  "+truncatePlain(message, max(width-16, 12)))
+	return lipgloss.NewStyle().Background(lipgloss.Color(bg)).Render(pad(content, width))
 }
 
 func modernImageScanFindingLine(finding api.ImageScanFinding, width int) string {
@@ -188,15 +449,6 @@ func modernImageScanFindingLine(finding api.ImageScanFinding, width int) string 
 	body := mainBodyStyle(colorBgMain).Render(" " + truncatePlain(firstNonEmpty(finding.CVEID, "CVE"), 16))
 	pkg := mainMutedStyle(colorBgMain).Render(" " + truncatePlain(finding.PackageName+" "+finding.PackageVersion, max(width-28, 8)))
 	return modernLine(sev+body+pkg, width, colorBgMain)
-}
-
-func modernImageScannerModeChips(mode int) string {
-	labels := []string{"Scan", "History"}
-	parts := make([]string, 0, len(labels))
-	for index, label := range labels {
-		parts = append(parts, modernScannerChip(label, index == mode))
-	}
-	return strings.Join(parts, mainBodyStyle(colorBgMain).Render("  "))
 }
 
 type imageScannerSummary struct {
@@ -355,23 +607,6 @@ func imageLastScanLabel(image api.ImageScannerImage) string {
 		return fmt.Sprintf("%d previous findings", image.VulnerabilityCount)
 	}
 	return "not scanned"
-}
-
-func modernScannerChip(label string, selected bool) string {
-	bg := colorBgPill
-	fg := colorText
-	prefix := "  "
-	if selected {
-		bg = colorPrimary
-		fg = colorOnPrimary
-		prefix = "> "
-	}
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color(bg)).
-		Foreground(lipgloss.Color(fg)).
-		Bold(selected).
-		Padding(0, 2).
-		Render(prefix + label)
 }
 
 func topImageScanFindings(findings []api.ImageScanFinding, limit int) []api.ImageScanFinding {

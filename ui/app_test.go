@@ -311,28 +311,314 @@ func TestImageScannerNavigationAndScanStart(t *testing.T) {
 
 	next, cmd := m.updateKey(specialKeyMsg(tea.KeyDown))
 	m = next.(model)
-	if cmd != nil || m.scannerCursor != 1 {
-		t.Fatalf("expected image cursor to move: %#v cmd=%v", m, cmd)
+	if cmd != nil || m.scannerMode != 1 {
+		t.Fatalf("expected source selection to move: %#v cmd=%v", m, cmd)
 	}
 
-	next, cmd = m.updateKey(specialKeyMsg(tea.KeyRight))
+	next, cmd = m.updateKey(keyMsg("enter"))
 	m = next.(model)
-	if cmd != nil || m.scannerMode != 1 {
+	if cmd != nil || m.focus != focusDetail {
+		t.Fatalf("expected selected source to open on right: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyEscape))
+	m = next.(model)
+	if cmd != nil || m.focus != focusList {
+		t.Fatalf("expected esc to return to source list: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyDown))
+	m = next.(model)
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyDown))
+	m = next.(model)
+	if cmd != nil || m.scannerMode != 3 {
 		t.Fatalf("expected scanner mode history: %#v cmd=%v", m, cmd)
 	}
 
 	next, cmd = m.updateKey(keyMsg("enter"))
 	m = next.(model)
-	if cmd == nil || m.scannerMode != 1 || m.scannerActiveScan.ID != "scan-1" || !m.scannerReportLoading {
+	if cmd != nil || m.focus != focusDetail || m.scannerActiveScan.ID != "" {
+		t.Fatalf("expected history workspace to open before scan: %#v cmd=%v", m, cmd)
+	}
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd == nil || m.scannerMode != 3 || m.scannerActiveScan.ID != "scan-1" || !m.scannerReportLoading {
 		t.Fatalf("expected history scan to open: %#v cmd=%v", m, cmd)
 	}
 
 	m.scannerMode = 0
 	m.scannerReportLoading = false
+	m.scannerActiveScan = api.ImageScanJob{}
+	m.focus = focusDetail
 	next, cmd = m.updateKey(keyMsg("enter"))
 	m = next.(model)
 	if cmd == nil || !m.scannerLoading || m.scannerMode != 0 {
 		t.Fatalf("expected image scan to start: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestImageScannerExternalAndGitSourceInputsMatchFrontendFlow(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.scannerMode = 1
+	m.scannerForm.externalRegistry = "ghcr.io"
+	m.scannerForm.externalName = "team/api"
+	m.scannerForm.externalTag = "v2"
+
+	input, err := m.imageScannerSourceInput(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.SourceKind != "external" || input.ImageRef != "ghcr.io/team/api:v2" || input.ForceRescan {
+		t.Fatalf("external input = %#v", input)
+	}
+
+	m.scannerMode = 2
+	m.scannerForm.gitRepository = "https://github.com/team/orders.git"
+	input, err = m.imageScannerSourceInput(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.SourceKind != "git" || input.BranchOrTag != "main" || input.DockerfilePath != "Dockerfile" ||
+		input.BuildContext != "." || input.TargetImageName != "orders" {
+		t.Fatalf("git input = %#v", input)
+	}
+}
+
+func TestImageScannerNormalizesDockerHubWebsiteRegistry(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.scannerMode = 1
+	m.scannerForm.externalRegistry = "https://hub.docker.com/"
+	m.scannerForm.externalName = "autooffensive/autooffensive-frontend"
+	m.scannerForm.externalTag = "73cb00d2"
+
+	input, err := m.imageScannerSourceInput(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.RegistryURL != "docker.io" ||
+		input.ImageRef != "docker.io/autooffensive/autooffensive-frontend:73cb00d2" {
+		t.Fatalf("external input = %#v", input)
+	}
+}
+
+func TestImageScannerRejectsDockerHubImageWebPageAsRegistry(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.scannerMode = 1
+	m.scannerForm.externalRegistry = "https://hub.docker.com/r/autooffensive/autooffensive-frontend"
+	m.scannerForm.externalName = "autooffensive/autooffensive-frontend"
+	m.scannerForm.externalTag = "latest"
+
+	if _, err := m.imageScannerSourceInput(false); err == nil || !strings.Contains(err.Error(), "use docker.io") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestImageScannerValidationMovesFocusToInvalidField(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.scannerMode = 1
+	m.scannerForm.focus = 4
+	m.scannerForm.externalRegistry = "https://hub.docker.com/r/team/api"
+	m.scannerForm.externalName = "team/api"
+	m.scannerForm.externalTag = "latest"
+
+	next, cmd := m.submitImageScannerForm()
+	m = next.(model)
+	if cmd != nil || m.scannerForm.focus != 0 || !strings.Contains(m.message, "use docker.io") {
+		t.Fatalf("validation state = %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestImageScannerSourceFormsValidateAndAcceptPaste(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 2
+
+	next, _ := m.updatePaste(tea.PasteMsg{Content: "https://github.com/team/platform.git"})
+	m = next.(model)
+	if m.scannerForm.gitRepository != "https://github.com/team/platform.git" {
+		t.Fatalf("git repository = %q", m.scannerForm.gitRepository)
+	}
+
+	m.scannerForm.gitPrivate = true
+	m.scannerForm.focus = 4
+	next, cmd := m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || !strings.Contains(m.message, "username and token") {
+		t.Fatalf("expected private credential validation: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestImageScannerTextFieldsAcceptJAndK(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 1
+	m.scannerForm.focus = 0
+
+	next, _ := m.updateKey(keyMsg("j"))
+	m = next.(model)
+	next, _ = m.updateKey(keyMsg("k"))
+	m = next.(model)
+	if m.scannerForm.externalRegistry != "jk" || m.scannerForm.focus != 0 {
+		t.Fatalf("external registry text field = %q focus=%d", m.scannerForm.externalRegistry, m.scannerForm.focus)
+	}
+
+	m.scannerForm.focus = 3
+	next, _ = m.updateKey(keyMsg("j"))
+	m = next.(model)
+	if m.scannerForm.focus != 4 {
+		t.Fatalf("expected j to navigate from non-text field, focus=%d", m.scannerForm.focus)
+	}
+}
+
+func TestImageScannerRendersSourceFirstWorkflow(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 1
+
+	left := strings.Join(m.modernImageScannerList(42, 24), "\n")
+	for _, expected := range []string{"SOURCE", "Harbor", "External", "Git", "History", "enter opens"} {
+		if !strings.Contains(left, expected) {
+			t.Fatalf("scanner source navigation missing %q:\n%s", expected, left)
+		}
+	}
+	if strings.Contains(left, "Registry URL") || strings.Contains(left, "Pull & Scan") {
+		t.Fatalf("scanner source navigation should not contain source data:\n%s", left)
+	}
+
+	right := strings.Join(m.modernImageScannerDetail(72, 30), "\n")
+	for _, expected := range []string{"External registry", "Registry URL", "Pull & Scan", "PREVIEW"} {
+		if !strings.Contains(right, expected) {
+			t.Fatalf("external scanner workspace missing %q:\n%s", expected, right)
+		}
+	}
+
+	m.scannerMode = 2
+	right = strings.Join(m.modernImageScannerDetail(72, 30), "\n")
+	if !strings.Contains(right, "Repository URL") || !strings.Contains(right, "Build & Scan") {
+		t.Fatalf("Git source workspace missing:\n%s", right)
+	}
+}
+
+func TestImageScannerHarborAndHistoryDataRenderOnRight(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusList
+	m.scannerImages = []api.ImageScannerImage{{ID: "image-1", Name: "api", Tag: "v1", Repository: "team/api"}}
+	m.scannerScans = []api.ImageScanJob{{ID: "scan-1", ImageName: "api", ImageTag: "v1", Status: "COMPLETED"}}
+
+	harbor := strings.Join(m.modernImageScannerDetail(72, 30), "\n")
+	if !strings.Contains(harbor, "DEPLOYED IMAGES") || !strings.Contains(harbor, "SELECTED IMAGE") || !strings.Contains(harbor, "api:v1") {
+		t.Fatalf("Harbor data should render on right:\n%s", harbor)
+	}
+
+	m.scannerMode = 3
+	history := strings.Join(m.modernImageScannerDetail(72, 30), "\n")
+	if !strings.Contains(history, "Scan history") || !strings.Contains(history, "SELECTED SCAN") || !strings.Contains(history, "completed") {
+		t.Fatalf("history data should render on right:\n%s", history)
+	}
+}
+
+func TestImageScannerSourceRowsKeepDataOnOneLine(t *testing.T) {
+	for _, test := range []struct {
+		label  string
+		state  string
+		active bool
+	}{
+		{label: "Harbor", state: "0 images", active: true},
+		{label: "External", state: "pull & scan"},
+		{label: "Git", state: "build & scan"},
+		{label: "History", state: "9 scans"},
+	} {
+		lines := modernImageScannerSourceRow(test.label, test.state, 42, test.active)
+		if len(lines) != 3 {
+			t.Fatalf("%s source row wrapped to %d lines:\n%s", test.label, len(lines), strings.Join(lines, "\n"))
+		}
+		if !strings.Contains(lines[1], test.label) || !strings.Contains(lines[1], test.state) {
+			t.Fatalf("%s source row data is not on one line:\n%s", test.label, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func TestImageScannerFooterAndFailedResultAreContextual(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 1
+
+	footer := m.modernFooter(120)
+	if !strings.Contains(footer, "field") || !strings.Contains(footer, "toggle") || strings.Contains(footer, "search") {
+		t.Fatalf("scanner form footer = %q", footer)
+	}
+
+	m.scannerActiveScan = api.ImageScanJob{
+		ID:            "scan-failed",
+		Status:        "FAILED",
+		FullReference: "docker.io/team/very-long-image-name:latest",
+		StatusMessage: "Jenkins image scan failed before Trivy returned a report.",
+	}
+	rendered := strings.Join(m.modernImageScanResult(m.scannerActiveScan, 54, 30), "\n")
+	if !strings.Contains(rendered, "Scan stopped before Trivy returned findings") ||
+		!strings.Contains(rendered, "Jenkins image scan failed") {
+		t.Fatalf("failed result UI:\n%s", rendered)
+	}
+}
+
+func TestImageScannerEscReturnsToSourcesAndCanOpenAnotherSource(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 1
+	m.scannerActiveScan = api.ImageScanJob{ID: "scan-failed", Status: "FAILED"}
+	m.scannerReport = `{"failed":true}`
+	m.scannerReportScanID = "scan-failed"
+
+	next, cmd := m.updateKey(specialKeyMsg(tea.KeyEscape))
+	m = next.(model)
+	if cmd != nil || m.focus != focusList || m.scannerMode != 1 {
+		t.Fatalf("esc should return to source list: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(specialKeyMsg(tea.KeyDown))
+	m = next.(model)
+	if cmd != nil || m.scannerMode != 2 || m.scannerActiveScan.ID != "" || m.scannerReport != "" {
+		t.Fatalf("switching source should clear stale result: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("enter"))
+	m = next.(model)
+	if cmd != nil || m.focus != focusDetail || m.scannerMode != 2 {
+		t.Fatalf("enter should open newly selected source: %#v cmd=%v", m, cmd)
+	}
+}
+
+func TestImageScannerResultCanForceRescanOrChooseAnotherSource(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.state = stateReady
+	m.page = pageImageScanner
+	m.focus = focusDetail
+	m.scannerMode = 0
+	m.scannerImages = []api.ImageScannerImage{{ID: "image-1", Name: "api", Tag: "v1"}}
+	m.scannerActiveScan = api.ImageScanJob{ID: "scan-1", SourceKind: "harbor", Status: "COMPLETED"}
+
+	next, cmd := m.updateKey(keyMsg("x"))
+	m = next.(model)
+	if cmd == nil || !m.scannerLoading || m.message != "Starting forced rescan..." {
+		t.Fatalf("expected forced rescan: %#v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.updateKey(keyMsg("n"))
+	m = next.(model)
+	if cmd != nil || m.scannerActiveScan.ID != "" || m.scannerMode != 0 {
+		t.Fatalf("expected source reset: %#v cmd=%v", m, cmd)
 	}
 }
 
@@ -411,6 +697,185 @@ func TestMonitoringLoadUpdatesOverview(t *testing.T) {
 	m = next.(model)
 	if m.monitoringLoading || m.monitoringOverview.Namespace != "workspace-dev" || m.tokens.AccessToken != "fresh" {
 		t.Fatalf("monitoring state = %#v", m)
+	}
+}
+
+func TestMonitoringFallbackUsesKubernetesPodsAndLiveProjects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/kubernetes/namespaces/workspace-dev/pods" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"namespace":"workspace-dev",
+			"total":1,
+			"pods":[{"name":"orders-db-0","phase":"Running","restartCount":2}]
+		}`)
+	}))
+	defer server.Close()
+
+	overview := applyMonitoringFallback(
+		context.Background(),
+		api.NewObservabilityClient(server.URL),
+		api.NewProjectClient(server.URL),
+		"token",
+		api.MonitoringOverview{Namespace: "workspace-dev"},
+		[]api.LiveProject{{ID: "db-1", Name: "orders-db", Kind: "database", Status: "DEPLOYED", Namespace: "workspace-dev"}},
+	)
+	if !overview.PodFallbackUsed || !overview.TelemetryPending ||
+		overview.NamespaceMetrics.TotalPods != 1 || overview.NamespaceMetrics.RunningPods != 1 ||
+		len(overview.Projects) != 1 || overview.Projects[0].RunningPods != 1 {
+		t.Fatalf("fallback overview = %#v", overview)
+	}
+}
+
+func TestMonitoringFallbackChecksProjectTargetCluster(t *testing.T) {
+	var targets []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.Query().Get("targetClusterName")
+		targets = append(targets, target)
+		w.Header().Set("Content-Type", "application/json")
+		if target == "edge-cluster" {
+			fmt.Fprint(w, `{"namespace":"workspace-dev","total":1,"pods":[{"name":"orders-db-0","phase":"Running"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"namespace":"workspace-dev","total":0,"pods":[]}`)
+	}))
+	defer server.Close()
+
+	overview := applyMonitoringFallback(
+		context.Background(),
+		api.NewObservabilityClient(server.URL),
+		api.NewProjectClient(server.URL),
+		"token",
+		api.MonitoringOverview{Namespace: "workspace-dev"},
+		[]api.LiveProject{{
+			ID:                "db-1",
+			Name:              "orders-db",
+			Kind:              "database",
+			Status:            "DEPLOYED",
+			Namespace:         "workspace-dev",
+			TargetClusterName: "edge-cluster",
+		}},
+	)
+	if len(targets) != 1 || targets[0] != "edge-cluster" {
+		t.Fatalf("target clusters checked = %#v", targets)
+	}
+	if !overview.PodFallbackUsed || !overview.TelemetryPending || overview.TelemetryUnavailable {
+		t.Fatalf("fallback overview = %#v", overview)
+	}
+}
+
+func TestMonitoringFallbackMarksUnavailableWhenNoPodsOrTelemetryExist(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"namespace":"workspace-dev","total":0,"pods":[]}`)
+	}))
+	defer server.Close()
+
+	overview := applyMonitoringFallback(
+		context.Background(),
+		api.NewObservabilityClient(server.URL),
+		api.NewProjectClient(server.URL),
+		"token",
+		api.MonitoringOverview{Namespace: "workspace-dev"},
+		[]api.LiveProject{{ID: "db-1", Name: "orders-db", Kind: "database", Status: "DEPLOYED", Namespace: "workspace-dev"}},
+	)
+	if overview.TelemetryPending || !overview.TelemetryUnavailable {
+		t.Fatalf("fallback overview = %#v", overview)
+	}
+}
+
+func TestMonitoringFallbackUsesSingleDatabaseMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/database-deployments/db-1/metrics":
+			fmt.Fprint(w, `{
+				"deploymentId":"db-1",
+				"namespace":"workspace-dev",
+				"podName":"orders-db-0",
+				"podPhase":"Running",
+				"readyReplicas":1,
+				"replicas":1,
+				"restartCount":2,
+				"cpuRequest":"250m",
+				"cpuLimit":"1",
+				"memoryRequest":"512Mi",
+				"memoryLimit":"1Gi",
+				"storageRequested":"10Gi",
+				"storageQuotaLimit":"20Gi"
+			}`)
+		default:
+			t.Fatalf("unexpected path = %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	overview := applyMonitoringFallback(
+		context.Background(),
+		api.NewObservabilityClient(server.URL),
+		api.NewProjectClient(server.URL),
+		"token",
+		api.MonitoringOverview{Namespace: "workspace-dev"},
+		[]api.LiveProject{{
+			ID:                    "db-project",
+			Name:                  "orders-db",
+			Kind:                  "database",
+			Status:                "DEPLOYED",
+			Namespace:             "workspace-dev",
+			DatabaseDeploymentIDs: []string{"db-1"},
+		}},
+	)
+	if overview.TelemetryPending || !overview.TelemetryUnavailable || !overview.AllocationFallbackUsed {
+		t.Fatalf("fallback state = %#v", overview)
+	}
+	if overview.NamespaceMetrics.RunningPods != 1 ||
+		overview.NamespaceMetrics.CPURequestsUsed != .25 ||
+		overview.NamespaceMetrics.MemoryRequestsUsed != 512*1024*1024 {
+		t.Fatalf("fallback metrics = %#v", overview.NamespaceMetrics)
+	}
+}
+
+func TestMonitoringMergeKeepsFastSummaryWhenDetailsAreEmpty(t *testing.T) {
+	summary := api.MonitoringOverview{
+		Namespace: "workspace-dev",
+		NamespaceMetrics: api.MonitoringNamespaceMetrics{
+			TotalPods:   1,
+			RunningPods: 1,
+		},
+	}
+	details := api.MonitoringOverview{Namespace: "workspace-dev", GeneratedAt: "2026-06-11T00:00:00Z"}
+	merged := mergeMonitoringOverview(summary, details)
+	if merged.NamespaceMetrics.TotalPods != 1 || merged.GeneratedAt != details.GeneratedAt {
+		t.Fatalf("merged overview = %#v", merged)
+	}
+}
+
+func TestMonitoringPendingTelemetryRendersWaitingInsteadOfZero(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.monitoringOverview = api.MonitoringOverview{
+		Namespace:        "workspace-dev",
+		TelemetryPending: true,
+		NamespaceMetrics: api.MonitoringNamespaceMetrics{TotalPods: 1, RunningPods: 1},
+		Projects:         []api.MonitoringProjectMetrics{{Name: "orders-db", TotalPods: 1, RunningPods: 1}},
+	}
+	rendered := strings.Join(m.modernMonitoringDetail(72, 30), "\n")
+	if !strings.Contains(rendered, "waiting") || strings.Contains(rendered, "CPU CORE") && strings.Contains(rendered, "CPU CORE            0%") {
+		t.Fatalf("pending telemetry UI:\n%s", rendered)
+	}
+}
+
+func TestMonitoringUnavailableRendersUnavailableInsteadOfWaiting(t *testing.T) {
+	m := initialModel(config.AppConfig{BackendBaseURL: "http://backend"}, nil)
+	m.monitoringOverview = api.MonitoringOverview{
+		Namespace:            "workspace-dev",
+		TelemetryUnavailable: true,
+		Projects:             []api.MonitoringProjectMetrics{{Name: "orders-db"}},
+	}
+	rendered := strings.Join(m.modernMonitoringDetail(72, 30), "\n")
+	if !strings.Contains(rendered, "unavailable") || strings.Contains(rendered, "still catching up") {
+		t.Fatalf("unavailable telemetry UI:\n%s", rendered)
 	}
 }
 

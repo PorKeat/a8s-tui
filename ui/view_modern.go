@@ -52,7 +52,7 @@ func (m model) modernDashboardView(width, height int) tea.View {
 		b.WriteString(modernFullWidthRow(row, width, bgDark))
 		b.WriteString("\n")
 	}
-	b.WriteString(modernFooter(width))
+	b.WriteString(m.modernFooter(width))
 
 	view := tea.NewView(b.String())
 	view.AltScreen = true
@@ -66,6 +66,9 @@ func (m model) modernLeftPane(width, height int) string {
 	contentWidth := modernPaneInnerWidth(width)
 	contentHeight := modernPaneInnerHeight(height)
 	active := m.focus == focusSidebar || (m.page == pageProjects && m.focus == focusList && !m.projectDetailOpen)
+	if m.page == pageImageScanner && m.focus == focusList {
+		active = true
+	}
 	switch {
 	case m.dbFormOpen || m.monolithFormOpen || (m.page == pageDeployment && m.focus != focusSidebar):
 		return modernPane(width, height, active, m.modernDeploymentList(contentWidth, contentHeight))
@@ -86,6 +89,9 @@ func (m model) modernRightPane(width, height int) string {
 	contentWidth := modernPaneInnerWidth(width)
 	contentHeight := modernPaneInnerHeight(height)
 	active := m.projectDetailOpen || m.dbFormOpen || m.monolithFormOpen || (m.focus == focusList && m.page != pageProjects)
+	if m.page == pageImageScanner {
+		active = m.focus == focusDetail
+	}
 
 	switch {
 	case m.dbFormOpen:
@@ -150,7 +156,7 @@ func (m model) refreshAge() string {
 	}
 }
 
-func modernFooter(width int) string {
+func (m model) modernFooter(width int) string {
 	items := []struct {
 		key   string
 		label string
@@ -163,6 +169,54 @@ func modernFooter(width int) string {
 		{"r", "refresh"},
 		{"o", "logout"},
 		{"q", "quit"},
+	}
+	if m.state == stateReady && m.page == pageImageScanner && m.focus != focusSidebar {
+		if m.focus == focusList {
+			items = []struct {
+				key   string
+				label string
+			}{
+				{"↑/↓", "source"},
+				{"enter", "open"},
+				{"tab", "open"},
+				{"r", "refresh"},
+				{"esc", "sections"},
+				{"q", "quit"},
+			}
+		} else if m.scannerActiveScan.ID != "" {
+			items = []struct {
+				key   string
+				label string
+			}{
+				{"n", "new scan"},
+				{"x", "rescan"},
+				{"r", "refresh"},
+				{"esc", "sources"},
+				{"q", "quit"},
+			}
+		} else if m.scannerMode == 1 || m.scannerMode == 2 {
+			items = []struct {
+				key   string
+				label string
+			}{
+				{"↑/↓", "field"},
+				{"tab", "next"},
+				{"enter", "advance"},
+				{"space", "toggle"},
+				{"esc", "sources"},
+			}
+		} else {
+			items = []struct {
+				key   string
+				label string
+			}{
+				{"↑/↓", "select"},
+				{"enter", "scan/open"},
+				{"r", "refresh"},
+				{"esc", "sources"},
+				{"q", "quit"},
+			}
+		}
 	}
 	var line string
 	for _, item := range items {

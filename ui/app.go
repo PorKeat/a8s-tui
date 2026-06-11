@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,7 @@ type model struct {
 	scannerReportLoading bool
 	scannerLoading       bool
 	scannerMode          int
+	scannerForm          imageScannerForm
 	monitoringOverview   api.MonitoringOverview
 	monitoringLoading    bool
 	monitoringCursor     int
@@ -298,6 +300,20 @@ type monolithicDeployForm struct {
 	relationshipCurrent int
 }
 
+type imageScannerForm struct {
+	focus            int
+	externalRegistry string
+	externalName     string
+	externalTag      string
+	externalPrivate  bool
+	externalUsername string
+	externalPassword string
+	gitRepository    string
+	gitPrivate       bool
+	gitUsername      string
+	gitPassword      string
+}
+
 func initialModel(config config.AppConfig, configErr error) model {
 	state := stateLoggedOut
 	message := "Press enter to authenticate with Keycloak"
@@ -318,6 +334,7 @@ func initialModel(config config.AppConfig, configErr error) model {
 		),
 		dbForm:       newDatabaseDeployForm(),
 		monolithForm: newMonolithicDeployForm(),
+		scannerForm:  newImageScannerForm(),
 		state:        state,
 		width:        118,
 		height:       36,
@@ -325,6 +342,337 @@ func initialModel(config config.AppConfig, configErr error) model {
 		focus:        focusSidebar,
 		themeIndex:   1,
 		message:      message,
+	}
+}
+
+func newImageScannerForm() imageScannerForm {
+	return imageScannerForm{externalTag: "latest"}
+}
+
+func (m model) updateImageScannerForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	code := msg.Key().Code
+	isEnter := key == "enter" || code == tea.KeyEnter || code == tea.KeyReturn
+	fieldCount := m.imageScannerFormFieldCount()
+
+	switch {
+	case key == "ctrl+c":
+		return m, tea.Quit
+	case key == "esc" || code == tea.KeyEscape:
+		m.focus = focusList
+		m.message = "Choose an image source"
+	case code == tea.KeyLeft:
+		m.message = "Press esc to return to image sources"
+	case code == tea.KeyRight:
+		m.message = "Press esc to return to image sources"
+	case key == "tab" || code == tea.KeyTab || code == tea.KeyDown ||
+		(key == "j" && !m.imageScannerTextFieldFocused()):
+		m.scannerForm.focus = wrapIndex(m.scannerForm.focus+1, fieldCount)
+	case code == tea.KeyUp || (key == "k" && !m.imageScannerTextFieldFocused()):
+		m.scannerForm.focus = wrapIndex(m.scannerForm.focus-1, fieldCount)
+	case key == "backspace" || key == "ctrl+h" || code == tea.KeyBackspace:
+		m.deleteImageScannerFormRune()
+	case key == " " || key == "space":
+		m.toggleImageScannerPrivateField()
+	case isEnter:
+		if m.scannerForm.focus == fieldCount-1 {
+			return m.submitImageScannerForm()
+		}
+		if m.imageScannerPrivateFieldFocused() {
+			m.toggleImageScannerPrivateField()
+			return m, nil
+		}
+		m.scannerForm.focus = wrapIndex(m.scannerForm.focus+1, fieldCount)
+	default:
+		if len(key) == 1 && key >= " " && key <= "~" {
+			m.appendImageScannerFormText(key)
+		}
+	}
+	return m, nil
+}
+
+func (m model) imageScannerFormFieldCount() int {
+	if m.scannerMode == 1 {
+		if m.scannerForm.externalPrivate {
+			return 7
+		}
+		return 5
+	}
+	if m.scannerForm.gitPrivate {
+		return 5
+	}
+	return 3
+}
+
+func (m model) imageScannerPrivateFieldFocused() bool {
+	if m.scannerMode == 1 {
+		return m.scannerForm.focus == 3
+	}
+	return m.scannerMode == 2 && m.scannerForm.focus == 1
+}
+
+func (m model) imageScannerTextFieldFocused() bool {
+	if m.scannerMode == 1 {
+		switch m.scannerForm.focus {
+		case 0, 1, 2:
+			return true
+		case 4, 5:
+			return m.scannerForm.externalPrivate
+		default:
+			return false
+		}
+	}
+	if m.scannerMode == 2 {
+		switch m.scannerForm.focus {
+		case 0:
+			return true
+		case 2, 3:
+			return m.scannerForm.gitPrivate
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func (m *model) toggleImageScannerPrivateField() {
+	if !m.imageScannerPrivateFieldFocused() {
+		return
+	}
+	if m.scannerMode == 1 {
+		m.scannerForm.externalPrivate = !m.scannerForm.externalPrivate
+	} else {
+		m.scannerForm.gitPrivate = !m.scannerForm.gitPrivate
+	}
+	m.scannerForm.focus = clamp(m.scannerForm.focus, 0, m.imageScannerFormFieldCount()-1)
+}
+
+func (m *model) appendImageScannerFormText(text string) {
+	form := &m.scannerForm
+	if m.scannerMode == 1 {
+		switch form.focus {
+		case 0:
+			form.externalRegistry += text
+		case 1:
+			form.externalName += text
+		case 2:
+			form.externalTag += text
+		case 4:
+			if form.externalPrivate {
+				form.externalUsername += text
+			}
+		case 5:
+			if form.externalPrivate {
+				form.externalPassword += text
+			}
+		}
+		return
+	}
+	switch form.focus {
+	case 0:
+		form.gitRepository += text
+	case 2:
+		if form.gitPrivate {
+			form.gitUsername += text
+		}
+	case 3:
+		if form.gitPrivate {
+			form.gitPassword += text
+		}
+	}
+}
+
+func (m *model) deleteImageScannerFormRune() {
+	form := &m.scannerForm
+	if m.scannerMode == 1 {
+		switch form.focus {
+		case 0:
+			form.externalRegistry = trimLastRune(form.externalRegistry)
+		case 1:
+			form.externalName = trimLastRune(form.externalName)
+		case 2:
+			form.externalTag = trimLastRune(form.externalTag)
+		case 4:
+			form.externalUsername = trimLastRune(form.externalUsername)
+		case 5:
+			form.externalPassword = trimLastRune(form.externalPassword)
+		}
+		return
+	}
+	switch form.focus {
+	case 0:
+		form.gitRepository = trimLastRune(form.gitRepository)
+	case 2:
+		form.gitUsername = trimLastRune(form.gitUsername)
+	case 3:
+		form.gitPassword = trimLastRune(form.gitPassword)
+	}
+}
+
+func (m model) submitImageScannerForm() (tea.Model, tea.Cmd) {
+	input, err := m.imageScannerSourceInput(false)
+	if err != nil {
+		m.scannerForm.focus = m.imageScannerValidationFocus()
+		m.message = "Image scan: " + err.Error()
+		return m, nil
+	}
+	if m.scannerMode == 1 {
+		m.scannerForm.externalRegistry = input.RegistryURL
+	}
+	m.scannerLoading = true
+	m.scannerActiveScan = api.ImageScanJob{}
+	m.scannerReport = ""
+	m.scannerReportScanID = ""
+	m.scannerReportLoading = false
+	m.message = "Starting " + scannerSourceLabel(m.scannerMode) + " scan..."
+	return m, m.startImageScanInputCmd(input)
+}
+
+func (m model) imageScannerValidationFocus() int {
+	form := m.scannerForm
+	switch m.scannerMode {
+	case 1:
+		if registry, err := normalizeExternalRegistry(form.externalRegistry); err != nil || registry == "" {
+			return 0
+		}
+		if strings.TrimSpace(form.externalName) == "" {
+			return 1
+		}
+		if strings.TrimSpace(form.externalTag) == "" {
+			return 2
+		}
+		if form.externalPrivate && strings.TrimSpace(form.externalUsername) == "" {
+			return 4
+		}
+		if form.externalPrivate && form.externalPassword == "" {
+			return 5
+		}
+	case 2:
+		if strings.TrimSpace(form.gitRepository) == "" {
+			return 0
+		}
+		if form.gitPrivate && strings.TrimSpace(form.gitUsername) == "" {
+			return 2
+		}
+		if form.gitPrivate && form.gitPassword == "" {
+			return 3
+		}
+	}
+	return m.scannerForm.focus
+}
+
+func (m model) imageScannerSourceInput(forceRescan bool) (api.CreateImageScanInput, error) {
+	form := m.scannerForm
+	switch m.scannerMode {
+	case 1:
+		registry, err := normalizeExternalRegistry(form.externalRegistry)
+		if err != nil {
+			return api.CreateImageScanInput{}, err
+		}
+		if registry == "" {
+			return api.CreateImageScanInput{}, errors.New("registry URL is required")
+		}
+		if strings.TrimSpace(form.externalName) == "" {
+			return api.CreateImageScanInput{}, errors.New("image name is required")
+		}
+		if strings.TrimSpace(form.externalTag) == "" {
+			return api.CreateImageScanInput{}, errors.New("image tag is required")
+		}
+		if form.externalPrivate && (strings.TrimSpace(form.externalUsername) == "" || form.externalPassword == "") {
+			return api.CreateImageScanInput{}, errors.New("registry username and password are required")
+		}
+		return api.CreateImageScanInput{
+			SourceKind:      "external",
+			ImageRef:        externalImageReference(registry, form.externalName, form.externalTag),
+			RegistryURL:     registry,
+			ImageName:       strings.TrimSpace(form.externalName),
+			ImageTag:        strings.TrimSpace(form.externalTag),
+			PrivateRegistry: form.externalPrivate,
+			Username:        strings.TrimSpace(form.externalUsername),
+			Password:        form.externalPassword,
+			ForceRescan:     forceRescan,
+		}, nil
+	case 2:
+		if strings.TrimSpace(form.gitRepository) == "" {
+			return api.CreateImageScanInput{}, errors.New("Git repository URL is required")
+		}
+		if form.gitPrivate && (strings.TrimSpace(form.gitUsername) == "" || form.gitPassword == "") {
+			return api.CreateImageScanInput{}, errors.New("repository username and token are required")
+		}
+		return api.CreateImageScanInput{
+			SourceKind:        "git",
+			RepositoryURL:     strings.TrimSpace(form.gitRepository),
+			BranchOrTag:       "main",
+			DockerfilePath:    "Dockerfile",
+			BuildContext:      ".",
+			TargetImageName:   gitRepositoryImageName(form.gitRepository),
+			PrivateRepository: form.gitPrivate,
+			Username:          strings.TrimSpace(form.gitUsername),
+			Password:          form.gitPassword,
+			ForceRescan:       forceRescan,
+		}, nil
+	default:
+		image, ok := m.selectedScannerImage()
+		if !ok {
+			return api.CreateImageScanInput{}, errors.New("choose a deployed Harbor image first")
+		}
+		return api.CreateImageScanInput{SourceKind: "harbor", ImageID: image.ID, ForceRescan: forceRescan}, nil
+	}
+}
+
+func externalImageReference(registryURL, imageName, imageTag string) string {
+	registryURL, _ = normalizeExternalRegistry(registryURL)
+	imageName = strings.Trim(strings.TrimSpace(imageName), "/")
+	if registryURL == "" || imageName == "" {
+		return ""
+	}
+	return registryURL + "/" + imageName + ":" + firstNonEmpty(strings.TrimSpace(imageTag), "latest")
+}
+
+func normalizeExternalRegistry(registryURL string) (string, error) {
+	registry := strings.TrimSpace(registryURL)
+	registry = strings.TrimPrefix(registry, "https://")
+	registry = strings.TrimPrefix(registry, "http://")
+	registry = strings.Trim(registry, "/")
+	if registry == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(registry, "?#") {
+		return "", errors.New("registry must be a host, not a website URL with query parameters")
+	}
+
+	lower := strings.ToLower(registry)
+	switch {
+	case lower == "hub.docker.com", lower == "registry-1.docker.io", lower == "index.docker.io":
+		return "docker.io", nil
+	case strings.HasPrefix(lower, "hub.docker.com/"):
+		return "", errors.New("use docker.io as Registry URL and put namespace/image in Image name")
+	}
+	return registry, nil
+}
+
+func gitRepositoryImageName(repositoryURL string) string {
+	name := strings.TrimSpace(repositoryURL)
+	if index := strings.IndexAny(name, "?#"); index >= 0 {
+		name = name[:index]
+	}
+	name = strings.Trim(name, "/")
+	if index := strings.LastIndex(name, "/"); index >= 0 {
+		name = name[index+1:]
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".git")
+	name = unsafeFilenameCharacters.ReplaceAllString(name, "-")
+	return firstNonEmpty(strings.Trim(name, "-"), "repo-build")
+}
+
+func scannerSourceLabel(mode int) string {
+	switch mode {
+	case 1:
+		return "external image"
+	case 2:
+		return "Git repository"
+	default:
+		return "Harbor image"
 	}
 }
 
@@ -692,7 +1040,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scannerReport = ""
 		m.scannerReportScanID = ""
 		m.scannerReportLoading = false
-		m.scannerMode = 0
 		m.message = imageScanStatusMessage(msg.scan)
 		if api.ImageScanTerminal(msg.scan.Status) {
 			if !api.ImageScanFailed(msg.scan.Status) && msg.scan.ID != "" {
@@ -746,7 +1093,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.monitoringOverview = msg.overview
 		m.monitoringCursor = clamp(m.monitoringCursor, 0, max(len(m.monitoringOverview.Projects)-1, 0))
 		m.lastRefreshed = time.Now()
-		m.message = fmt.Sprintf("Monitoring loaded for %s", firstNonEmpty(msg.overview.Namespace, "workspace"))
+		if msg.overview.TelemetryPending {
+			m.message = "Workloads found; waiting for Prometheus telemetry"
+		} else if msg.overview.AllocationFallbackUsed {
+			m.message = "Live usage unavailable; showing database readiness and allocation"
+		} else if msg.overview.TelemetryUnavailable {
+			m.message = "Monitoring telemetry unavailable; check the deployment cluster and Prometheus"
+		} else {
+			m.message = fmt.Sprintf("Monitoring loaded for %s", firstNonEmpty(msg.overview.Namespace, "workspace"))
+		}
 	case logsLoadMsg:
 		if msg.tokens.AccessToken != "" {
 			m.tokens = msg.tokens
@@ -837,6 +1192,10 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.projectDetailOpen {
 		return m.updateProjectDetail(msg)
 	}
+	if m.state == stateReady && m.page == pageImageScanner && m.focus == focusDetail &&
+		m.scannerActiveScan.ID == "" && (m.scannerMode == 1 || m.scannerMode == 2) {
+		return m.updateImageScannerForm(msg)
+	}
 
 	key := msg.String()
 	code := msg.Key().Code
@@ -868,6 +1227,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key == "ctrl+c" || key == "q":
 		return m, tea.Quit
 	case key == "esc" || code == tea.KeyEscape:
+		if m.state == stateReady && m.page == pageImageScanner && m.focus == focusDetail {
+			m.focus = focusList
+			m.message = "Choose an image source"
+			return m, nil
+		}
 		if m.state == stateReady && m.focus != focusSidebar {
 			m.focus = focusSidebar
 			m.filtering = false
@@ -888,6 +1252,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.activateDeploymentFeature()
 		}
 		if m.state == stateReady && isEnter && m.page == pageImageScanner {
+			if m.focus == focusList {
+				m.focus = focusDetail
+				m.message = "Opened " + scannerSourceLabel(m.scannerMode)
+				return m, nil
+			}
 			return m.activateImageScannerSelection()
 		}
 		if m.state == stateReady && isEnter && m.page == pageLogs {
@@ -942,12 +1311,47 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.message = "Refreshing live projects..."
 			return m, m.fetchProjectsCmd()
 		}
+	case key == "n":
+		if m.state == stateReady && m.page == pageImageScanner && m.focus == focusDetail {
+			m.scannerActiveScan = api.ImageScanJob{}
+			m.scannerReport = ""
+			m.scannerReportScanID = ""
+			m.scannerReportLoading = false
+			m.scannerMode = 0
+			m.focus = focusList
+			m.message = "Choose another image source to scan"
+		}
+	case key == "x":
+		if m.state == stateReady && m.page == pageImageScanner && m.focus == focusDetail &&
+			m.scannerMode != 3 && m.scannerActiveScan.ID != "" {
+			input, err := m.imageScannerSourceInput(true)
+			if err != nil {
+				m.message = "Rescan unavailable: " + err.Error()
+				return m, nil
+			}
+			m.scannerLoading = true
+			m.scannerReport = ""
+			m.scannerReportScanID = ""
+			m.scannerReportLoading = false
+			m.message = "Starting forced rescan..."
+			return m, m.startImageScanInputCmd(input)
+		}
 	case key == "o":
 		if m.tokens.AccessToken != "" || m.tokens.IDToken != "" || m.state == stateReady {
 			return m.logout()
 		}
 	case key == "tab" || code == tea.KeyTab:
-		m.focus = focusArea((int(m.focus) + 1) % m.focusAreaCount())
+		if m.state == stateReady && m.page == pageImageScanner && m.focus != focusSidebar {
+			if m.focus == focusList {
+				m.focus = focusDetail
+				m.message = "Opened " + scannerSourceLabel(m.scannerMode)
+			} else {
+				m.focus = focusList
+				m.message = "Choose an image source"
+			}
+		} else {
+			m.focus = focusArea((int(m.focus) + 1) % m.focusAreaCount())
+		}
 	case key == "/" || code == '/':
 		if m.state == stateReady {
 			m.page = pageProjects
@@ -976,7 +1380,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else if m.state == stateReady && m.page == pageDeployment {
 			m.moveDeploymentCursor(-1)
 		} else if m.state == stateReady && m.page == pageImageScanner {
-			m.moveImageScannerCursor(-1)
+			if m.focus == focusList {
+				m.moveImageScannerMode(-1)
+			} else {
+				m.moveImageScannerCursor(-1)
+			}
 		} else if m.state == stateReady && m.page == pageLogs {
 			m.moveLogsCursor(-1)
 		} else if m.state == stateReady && m.page == pageMonitoring {
@@ -994,7 +1402,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else if m.state == stateReady && m.page == pageDeployment {
 			m.moveDeploymentCursor(1)
 		} else if m.state == stateReady && m.page == pageImageScanner {
-			m.moveImageScannerCursor(1)
+			if m.focus == focusList {
+				m.moveImageScannerMode(1)
+			} else {
+				m.moveImageScannerCursor(1)
+			}
 		} else if m.state == stateReady && m.page == pageLogs {
 			m.moveLogsCursor(1)
 		} else if m.state == stateReady && m.page == pageMonitoring {
@@ -1014,7 +1426,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.page == pageImageScanner {
-				m.moveImageScannerMode(-1)
+				if m.focus == focusList {
+					m.moveImageScannerMode(-1)
+				} else {
+					m.message = "Press esc to return to image sources"
+				}
 				return m, nil
 			}
 			m.message = "Use esc to leave this workspace"
@@ -1027,7 +1443,11 @@ func (m model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.page == pageImageScanner {
-				m.moveImageScannerMode(1)
+				if m.focus == focusList {
+					m.moveImageScannerMode(1)
+				} else {
+					m.message = "Press esc to return to image sources"
+				}
 				return m, nil
 			}
 			m.message = "Use esc to leave this workspace"
@@ -1058,6 +1478,10 @@ func (m model) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 			m.appendMonolithicFormText(text)
 		}
 		m.message = "Pasted into field"
+	case m.state == stateReady && m.page == pageImageScanner && m.focus == focusDetail &&
+		m.scannerActiveScan.ID == "" && (m.scannerMode == 1 || m.scannerMode == 2):
+		m.appendImageScannerFormText(text)
+		m.message = "Pasted into scanner source field"
 	case m.filtering:
 		m.filter += text
 		m.cursor = clamp(m.cursor, 0, max(len(m.visibleProjects())-1, 0))
@@ -2326,14 +2750,14 @@ func (m model) activateImageScannerSelection() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.scannerMode {
-	case 1:
+	case 3:
 		scan, ok := m.selectedScannerHistory()
 		if !ok {
 			m.message = "No scan history selected"
 			return m, nil
 		}
 		m.scannerActiveScan = scan
-		m.scannerMode = 1
+		m.scannerMode = 3
 		m.message = "Opened scan " + firstNonEmpty(scan.ImageName, scan.ID)
 		m.scannerReport = ""
 		m.scannerReportScanID = ""
@@ -2343,6 +2767,8 @@ func (m model) activateImageScannerSelection() (tea.Model, tea.Cmd) {
 			return m, m.loadImageScanReportCmd(scan.ID)
 		}
 		return m, nil
+	case 1, 2:
+		return m.submitImageScannerForm()
 	default:
 		image, ok := m.selectedScannerImage()
 		if !ok {
@@ -2508,6 +2934,7 @@ func (m model) logout() (tea.Model, tea.Cmd) {
 	m.scannerReportLoading = false
 	m.scannerLoading = false
 	m.scannerMode = 0
+	m.scannerForm = newImageScannerForm()
 	m.monitoringOverview = api.MonitoringOverview{}
 	m.monitoringLoading = false
 	m.monitoringCursor = 0
@@ -2823,7 +3250,7 @@ func (m *model) moveDeploymentCursor(delta int) {
 
 func (m *model) moveImageScannerCursor(delta int) {
 	switch m.scannerMode {
-	case 1:
+	case 3:
 		m.scannerHistoryCursor = clamp(m.scannerHistoryCursor+delta, 0, max(len(m.scannerScans)-1, 0))
 	default:
 		m.scannerCursor = clamp(m.scannerCursor+delta, 0, max(len(m.scannerImages)-1, 0))
@@ -2831,11 +3258,23 @@ func (m *model) moveImageScannerCursor(delta int) {
 }
 
 func (m *model) moveImageScannerMode(delta int) {
-	m.scannerMode = wrapIndex(m.scannerMode+delta, 2)
+	previous := m.scannerMode
+	m.scannerMode = wrapIndex(m.scannerMode+delta, 4)
+	if m.scannerMode != previous {
+		m.scannerActiveScan = api.ImageScanJob{}
+		m.scannerReport = ""
+		m.scannerReportScanID = ""
+		m.scannerReportLoading = false
+		m.scannerForm.focus = 0
+	}
 	switch m.scannerMode {
 	case 0:
-		m.message = "Scan images selected"
+		m.message = "Harbor images selected"
 	case 1:
+		m.message = "External registry selected"
+	case 2:
+		m.message = "Git repository selected"
+	case 3:
 		m.message = "Scan history selected"
 	}
 }
@@ -2964,6 +3403,13 @@ func (m model) loadImageScannerCmd() tea.Cmd {
 }
 
 func (m model) startImageScanCmd(image api.ImageScannerImage) tea.Cmd {
+	return m.startImageScanInputCmd(api.CreateImageScanInput{
+		SourceKind: "harbor",
+		ImageID:    image.ID,
+	})
+}
+
+func (m model) startImageScanInputCmd(input api.CreateImageScanInput) tea.Cmd {
 	scannerAPI := m.scannerAPI
 	authClient := m.auth
 	tokens := m.tokens
@@ -2978,21 +3424,13 @@ func (m model) startImageScanCmd(image api.ImageScannerImage) tea.Cmd {
 				return imageScanStartMsg{tokens: tokens, err: err}
 			}
 		}
-		scan, err := scannerAPI.CreateScan(ctx, tokens.AccessToken, api.CreateImageScanInput{
-			SourceKind:  "harbor",
-			ImageID:     image.ID,
-			ForceRescan: true,
-		})
+		scan, err := scannerAPI.CreateScan(ctx, tokens.AccessToken, input)
 		if api.IsUnauthorized(err) && tokens.CanRefresh() {
 			tokens, err = authClient.Refresh(ctx, tokens)
 			if err != nil {
 				return imageScanStartMsg{tokens: tokens, err: err}
 			}
-			scan, err = scannerAPI.CreateScan(ctx, tokens.AccessToken, api.CreateImageScanInput{
-				SourceKind:  "harbor",
-				ImageID:     image.ID,
-				ForceRescan: true,
-			})
+			scan, err = scannerAPI.CreateScan(ctx, tokens.AccessToken, input)
 		}
 		return imageScanStartMsg{tokens: tokens, scan: scan, err: err}
 	}
@@ -3057,8 +3495,10 @@ func (m model) loadImageScanReportCmd(scanID string) tea.Cmd {
 
 func (m model) loadMonitoringCmd() tea.Cmd {
 	observabilityAPI := m.observabilityAPI
+	projectsAPI := m.projectsAPI
 	authClient := m.auth
 	tokens := m.tokens
+	liveProjects := append([]api.LiveProject(nil), m.projects...)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -3070,16 +3510,262 @@ func (m model) loadMonitoringCmd() tea.Cmd {
 				return monitoringLoadMsg{tokens: tokens, err: err}
 			}
 		}
-		overview, err := observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+		summaryOptions := api.MonitoringOverviewOptions{}
+		overview, err := observabilityAPI.MonitoringOverviewWithOptions(ctx, tokens.AccessToken, summaryOptions)
 		if api.IsUnauthorized(err) && tokens.CanRefresh() {
 			tokens, err = authClient.Refresh(ctx, tokens)
 			if err != nil {
 				return monitoringLoadMsg{tokens: tokens, err: err}
 			}
-			overview, err = observabilityAPI.MonitoringOverview(ctx, tokens.AccessToken)
+			overview, err = observabilityAPI.MonitoringOverviewWithOptions(ctx, tokens.AccessToken, summaryOptions)
 		}
+		if err != nil {
+			return monitoringLoadMsg{tokens: tokens, overview: overview, err: err}
+		}
+
+		detailOptions := api.MonitoringOverviewOptions{
+			IncludeSeries:           true,
+			IncludeProjects:         true,
+			IncludeNamespaceDetails: true,
+		}
+		details, detailErr := observabilityAPI.MonitoringOverviewWithOptions(ctx, tokens.AccessToken, detailOptions)
+		if detailErr == nil {
+			overview = mergeMonitoringOverview(overview, details)
+		}
+		overview = applyMonitoringFallback(ctx, observabilityAPI, projectsAPI, tokens.AccessToken, overview, liveProjects)
 		return monitoringLoadMsg{tokens: tokens, overview: overview, err: err}
 	}
+}
+
+func mergeMonitoringOverview(summary, details api.MonitoringOverview) api.MonitoringOverview {
+	if details.Namespace != "" {
+		summary.Namespace = details.Namespace
+	}
+	if details.GeneratedAt != "" {
+		summary.GeneratedAt = details.GeneratedAt
+	}
+	if len(details.Clusters) > 0 {
+		summary.Clusters = details.Clusters
+	}
+	if len(details.NamespaceSeries) > 0 {
+		summary.NamespaceSeries = details.NamespaceSeries
+	}
+	if len(details.Projects) > 0 {
+		summary.Projects = details.Projects
+	}
+	if monitoringMetricsHaveData(details.NamespaceMetrics) || !monitoringMetricsHaveData(summary.NamespaceMetrics) {
+		summary.NamespaceMetrics = details.NamespaceMetrics
+	}
+	return summary
+}
+
+func applyMonitoringFallback(
+	ctx context.Context,
+	observabilityAPI api.ObservabilityClient,
+	projectsAPI api.ProjectClient,
+	token string,
+	overview api.MonitoringOverview,
+	liveProjects []api.LiveProject,
+) api.MonitoringOverview {
+	namespace := strings.TrimSpace(overview.Namespace)
+	if namespace == "" {
+		for _, project := range liveProjects {
+			if strings.TrimSpace(project.Namespace) != "" {
+				namespace = strings.TrimSpace(project.Namespace)
+				overview.Namespace = namespace
+				break
+			}
+		}
+	}
+
+	overview = applyDatabaseMonitoringFallback(ctx, projectsAPI, token, overview, liveProjects)
+	if overview.NamespaceMetrics.TotalPods <= 0 && namespace != "" {
+		fallbackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		for _, targetCluster := range monitoringTargetClusters(liveProjects, namespace) {
+			pods, err := observabilityAPI.ListPods(fallbackCtx, token, namespace, targetCluster)
+			if err != nil || len(pods.Pods) == 0 {
+				continue
+			}
+			overview.PodFallbackUsed = true
+			overview.NamespaceMetrics.TotalPods = float64(len(pods.Pods))
+			for _, pod := range pods.Pods {
+				if strings.EqualFold(pod.Phase, "running") {
+					overview.NamespaceMetrics.RunningPods++
+				}
+				if strings.EqualFold(pod.Phase, "pending") {
+					overview.NamespaceMetrics.PendingPods++
+				}
+				if strings.EqualFold(pod.Phase, "failed") {
+					overview.NamespaceMetrics.FailedPods++
+				}
+				overview.NamespaceMetrics.RestartsLastHour += float64(pod.RestartCount)
+			}
+			break
+		}
+	}
+
+	if len(overview.Projects) == 0 {
+		for _, project := range liveProjects {
+			if project.Namespace != "" && namespace != "" && project.Namespace != namespace {
+				continue
+			}
+			overview.Projects = append(overview.Projects, api.MonitoringProjectMetrics{
+				ID:        project.ID,
+				Name:      firstNonEmpty(project.Name, project.ProjectName),
+				Kind:      project.Kind,
+				Status:    project.Status,
+				Namespace: firstNonEmpty(project.Namespace, namespace),
+			})
+		}
+		if len(overview.Projects) == 1 && overview.PodFallbackUsed {
+			overview.Projects[0].TotalPods = overview.NamespaceMetrics.TotalPods
+			overview.Projects[0].RunningPods = overview.NamespaceMetrics.RunningPods
+			overview.Projects[0].PendingPods = overview.NamespaceMetrics.PendingPods
+			overview.Projects[0].FailedPods = overview.NamespaceMetrics.FailedPods
+			overview.Projects[0].RestartsLastHour = overview.NamespaceMetrics.RestartsLastHour
+		}
+	}
+	usageAvailable := monitoringUsageMetricsHaveData(overview.NamespaceMetrics)
+	overview.TelemetryPending = !usageAvailable && overview.PodFallbackUsed
+	overview.TelemetryUnavailable = !usageAvailable && !overview.TelemetryPending && len(overview.Projects) > 0
+	return overview
+}
+
+func applyDatabaseMonitoringFallback(
+	ctx context.Context,
+	projectsAPI api.ProjectClient,
+	token string,
+	overview api.MonitoringOverview,
+	liveProjects []api.LiveProject,
+) api.MonitoringOverview {
+	if monitoringWorkloadsHaveData(overview) {
+		return overview
+	}
+	metricsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	for _, project := range liveProjects {
+		if project.Kind != "database" {
+			continue
+		}
+		for _, deploymentID := range project.DatabaseDeploymentIDs {
+			metrics, err := projectsAPI.FetchDatabaseDeploymentMetrics(metricsCtx, token, deploymentID)
+			if err != nil {
+				continue
+			}
+			replicas := metrics.Replicas
+			if replicas <= 0 && (metrics.PodName != "" || metrics.PodPhase != "") {
+				replicas = 1
+			}
+			ready := metrics.ReadyReplicas
+			if ready <= 0 && strings.EqualFold(metrics.PodPhase, "running") {
+				ready = 1
+			}
+			overview.AllocationFallbackUsed = true
+			overview.NamespaceMetrics.TotalPods += float64(replicas)
+			overview.NamespaceMetrics.RunningPods += float64(ready)
+			overview.NamespaceMetrics.PendingPods += float64(max(replicas-ready, 0))
+			overview.NamespaceMetrics.RestartsLastHour += float64(metrics.RestartCount)
+			overview.NamespaceMetrics.CPURequestsUsed += parseCPUQuantity(metrics.CPURequest)
+			overview.NamespaceMetrics.CPURequestsLimit += parseCPUQuantity(metrics.CPULimit)
+			overview.NamespaceMetrics.MemoryRequestsUsed += parseByteQuantity(metrics.MemoryRequest)
+			overview.NamespaceMetrics.MemoryRequestsLimit += parseByteQuantity(metrics.MemoryLimit)
+			overview.NamespaceMetrics.StorageRequestsUsed += parseByteQuantity(metrics.StorageRequested)
+			overview.NamespaceMetrics.StorageRequestsLimit += parseByteQuantity(metrics.StorageQuotaLimit)
+		}
+	}
+	return overview
+}
+
+func parseCPUQuantity(value string) float64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if strings.HasSuffix(value, "m") {
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "m")), 64)
+		return parsed / 1000
+	}
+	parsed, _ := strconv.ParseFloat(value, 64)
+	return parsed
+}
+
+func parseByteQuantity(value string) float64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	units := []struct {
+		suffix string
+		factor float64
+	}{
+		{"Ti", 1024 * 1024 * 1024 * 1024},
+		{"Gi", 1024 * 1024 * 1024},
+		{"Mi", 1024 * 1024},
+		{"Ki", 1024},
+		{"T", 1000 * 1000 * 1000 * 1000},
+		{"G", 1000 * 1000 * 1000},
+		{"M", 1000 * 1000},
+		{"K", 1000},
+	}
+	for _, unit := range units {
+		if strings.HasSuffix(value, unit.suffix) {
+			parsed, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, unit.suffix)), 64)
+			return parsed * unit.factor
+		}
+	}
+	parsed, _ := strconv.ParseFloat(value, 64)
+	return parsed
+}
+
+func monitoringTargetClusters(projects []api.LiveProject, namespace string) []string {
+	targets := make([]string, 0, len(projects)+1)
+	seen := map[string]bool{}
+	for _, project := range projects {
+		if project.Namespace != "" && namespace != "" && project.Namespace != namespace {
+			continue
+		}
+		target := strings.TrimSpace(project.TargetClusterName)
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	targets = append(targets, "")
+	return targets
+}
+
+func monitoringWorkloadsHaveData(overview api.MonitoringOverview) bool {
+	if overview.NamespaceMetrics.TotalPods > 0 ||
+		overview.NamespaceMetrics.RunningPods > 0 ||
+		overview.NamespaceMetrics.PendingPods > 0 ||
+		overview.NamespaceMetrics.FailedPods > 0 {
+		return true
+	}
+	for _, project := range overview.Projects {
+		if project.TotalPods > 0 || project.RunningPods > 0 || project.PendingPods > 0 || project.FailedPods > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func monitoringMetricsHaveData(metrics api.MonitoringNamespaceMetrics) bool {
+	return metrics.TotalPods > 0 ||
+		metrics.RunningPods > 0 ||
+		monitoringUsageMetricsHaveData(metrics) ||
+		metrics.CPURequestsUsed > 0 ||
+		metrics.MemoryRequestsUsed > 0 ||
+		metrics.StorageRequestsUsed > 0
+}
+
+func monitoringUsageMetricsHaveData(metrics api.MonitoringNamespaceMetrics) bool {
+	return metrics.CPUCores > 0 ||
+		metrics.MemoryBytes > 0 ||
+		metrics.NetworkReceiveBytesPerSecond > 0 ||
+		metrics.NetworkTransmitBytesPerSecond > 0
 }
 
 func (m model) startRouteCheckCmd(projectID string) tea.Cmd {

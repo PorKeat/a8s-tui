@@ -166,6 +166,28 @@ type DatabaseDeploymentCredentialsRecord struct {
 	AuthSecretName        string
 }
 
+type DatabaseDeploymentMetricsRecord struct {
+	DeploymentID      string
+	ReleaseName       string
+	Namespace         string
+	PodName           string
+	PodPhase          string
+	RestartCount      int
+	ReadyReplicas     int
+	Replicas          int
+	StorageRequested  string
+	StorageQuotaUsed  string
+	StorageQuotaLimit string
+	CPURequest        string
+	CPULimit          string
+	CPUQuotaUsed      string
+	CPUQuotaLimit     string
+	MemoryRequest     string
+	MemoryLimit       string
+	MemoryQuotaUsed   string
+	MemoryQuotaLimit  string
+}
+
 type ClusterDeploymentRecord struct {
 	ClusterID         string
 	ReleaseName       string
@@ -812,6 +834,38 @@ func (c ProjectClient) FetchDatabaseDeploymentCredentials(ctx context.Context, t
 	return c.fetchDatabaseDeploymentCredentials(ctx, token, endpoint)
 }
 
+func (c ProjectClient) FetchDatabaseDeploymentMetrics(ctx context.Context, token, deploymentID string) (DatabaseDeploymentMetricsRecord, error) {
+	if strings.TrimSpace(deploymentID) == "" {
+		return DatabaseDeploymentMetricsRecord{}, errors.New("database deployment id is required")
+	}
+	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/database-deployments", deploymentID, "metrics")
+	if err != nil {
+		return DatabaseDeploymentMetricsRecord{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return DatabaseDeploymentMetricsRecord{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := c.client.Do(req)
+	if err != nil {
+		return DatabaseDeploymentMetricsRecord{}, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return DatabaseDeploymentMetricsRecord{}, httpStatusError{status: res.StatusCode, message: decodeErrorMessage(res)}
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return DatabaseDeploymentMetricsRecord{}, fmt.Errorf("decode database deployment metrics response: %w", err)
+	}
+	return normalizeDatabaseDeploymentMetrics(payload), nil
+}
+
 func (c ProjectClient) FetchClusterDeploymentCredentials(ctx context.Context, token, namespace, clusterID string) (DatabaseDeploymentCredentialsRecord, error) {
 	if strings.TrimSpace(namespace) == "" {
 		return DatabaseDeploymentCredentialsRecord{}, errors.New("cluster namespace is required")
@@ -1021,6 +1075,30 @@ func normalizeDatabaseDeploymentCredentials(payload map[string]any) DatabaseDepl
 		ServicePort:           readInt(payload["servicePort"]),
 		ConnectionTLSEnabled:  readBool(payload["connectionTlsEnabled"]),
 		AuthSecretName:        readString(payload["authSecretName"]),
+	}
+}
+
+func normalizeDatabaseDeploymentMetrics(payload map[string]any) DatabaseDeploymentMetricsRecord {
+	return DatabaseDeploymentMetricsRecord{
+		DeploymentID:      readString(payload["deploymentId"]),
+		ReleaseName:       readString(payload["releaseName"]),
+		Namespace:         readString(payload["namespace"]),
+		PodName:           readString(payload["podName"]),
+		PodPhase:          readString(payload["podPhase"]),
+		RestartCount:      readInt(payload["restartCount"]),
+		ReadyReplicas:     readInt(payload["readyReplicas"]),
+		Replicas:          readInt(payload["replicas"]),
+		StorageRequested:  readString(payload["storageRequested"]),
+		StorageQuotaUsed:  readString(payload["storageQuotaUsed"]),
+		StorageQuotaLimit: readString(payload["storageQuotaLimit"]),
+		CPURequest:        readString(payload["cpuRequest"]),
+		CPULimit:          readString(payload["cpuLimit"]),
+		CPUQuotaUsed:      readString(payload["cpuQuotaUsed"]),
+		CPUQuotaLimit:     readString(payload["cpuQuotaLimit"]),
+		MemoryRequest:     readString(payload["memoryRequest"]),
+		MemoryLimit:       readString(payload["memoryLimit"]),
+		MemoryQuotaUsed:   readString(payload["memoryQuotaUsed"]),
+		MemoryQuotaLimit:  readString(payload["memoryQuotaLimit"]),
 	}
 }
 

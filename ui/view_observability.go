@@ -118,6 +118,13 @@ func (m model) modernMonitoringList(width, height int) []string {
 		modernTableHeader("PROJECT", "HEALTH", width),
 		modernRule(width),
 	)
+	if m.monitoringOverview.TelemetryPending {
+		lines = append(lines, modernMutedLine("Workloads found · waiting for Prometheus telemetry.", width))
+	} else if m.monitoringOverview.AllocationFallbackUsed {
+		lines = append(lines, modernMutedLine("Live usage unavailable · showing database readiness and allocation.", width))
+	} else if m.monitoringOverview.TelemetryUnavailable {
+		lines = append(lines, modernMutedLine("Telemetry unavailable · check the deployment cluster and Prometheus.", width))
+	}
 	if len(m.monitoringOverview.Projects) == 0 {
 		lines = append(lines, modernMutedLine("No project metrics returned yet.", width))
 		return modernCropLines(lines, width, height)
@@ -143,12 +150,25 @@ func (m model) modernMonitoringDetail(width, height int) []string {
 		modernLine("", width, colorBgMain),
 	}
 	metrics := m.monitoringOverview.NamespaceMetrics
-	lines = append(lines, modernResourceMonitorLines(metrics, width)...)
+	telemetryStatus := ""
+	if m.monitoringOverview.TelemetryPending {
+		telemetryStatus = "waiting"
+	} else if m.monitoringOverview.TelemetryUnavailable {
+		telemetryStatus = "unavailable"
+	}
+	lines = append(lines, modernResourceMonitorLines(metrics, width, telemetryStatus)...)
 	lines = append(lines, modernLine("", width, colorBgMain), modernRule(width), modernLine("", width, colorBgMain))
 	if !ok {
 		lines = append(lines, modernFieldLine("Namespace", firstNonEmpty(m.monitoringOverview.Namespace, "n/a"), width))
 		lines = append(lines, modernFieldLine("Pods", fmt.Sprintf("%.0f / %.0f running", metrics.RunningPods, metrics.TotalPods), width))
 		lines = append(lines, modernFieldLine("Restarts", fmt.Sprintf("%.0f last hour", metrics.RestartsLastHour), width))
+		if m.monitoringOverview.TelemetryPending {
+			lines = append(lines, modernMutedLine("Kubernetes found workloads; Prometheus telemetry is still catching up.", width))
+		} else if m.monitoringOverview.AllocationFallbackUsed {
+			lines = append(lines, modernMutedLine("Showing database readiness and allocation; live usage telemetry is unavailable.", width))
+		} else if m.monitoringOverview.TelemetryUnavailable {
+			lines = append(lines, modernMutedLine("No workload telemetry was found. Check the deployment cluster and Prometheus.", width))
+		}
 		lines = append(lines, modernMutedLine("Press r to refresh monitoring metrics.", width))
 		return modernCropLines(lines, width, height)
 	}
@@ -172,17 +192,18 @@ func (m model) modernMonitoringDetail(width, height int) []string {
 	return modernCropLines(lines, width, height)
 }
 
-func modernResourceMonitorLines(metrics api.MonitoringNamespaceMetrics, width int) []string {
+func modernResourceMonitorLines(metrics api.MonitoringNamespaceMetrics, width int, telemetryStatus string) []string {
 	lines := []string{}
 	cpuPct := resourcePercent(metrics.CPURequestsUsed, metrics.CPURequestsLimit, metrics.CPUCores, 8)
 	memPct := resourcePercent(metrics.MemoryRequestsUsed, metrics.MemoryRequestsLimit, metrics.MemoryBytes, 16*1024*1024*1024)
 	storagePct := resourcePercent(metrics.StorageRequestsUsed, metrics.StorageRequestsLimit, 0, 0)
 	networkPct := networkPercent(metrics.NetworkReceiveBytesPerSecond, metrics.NetworkTransmitBytesPerSecond)
+	telemetryAvailable := telemetryStatus == ""
 	items := []resourceMonitorItem{
-		{label: "CPU CORE", value: cpuPct, color: colorInfo},
-		{label: "MEMORY (RAM)", value: memPct, color: colorWarning},
-		{label: "NVME STORAGE", value: storagePct, color: colorError},
-		{label: "NETWORK UP/DOWN", value: networkPct, color: colorSuccess},
+		{label: "CPU CORE", value: cpuPct, color: colorInfo, available: telemetryAvailable || metrics.CPURequestsUsed > 0, unavailableLabel: telemetryStatus},
+		{label: "MEMORY (RAM)", value: memPct, color: colorWarning, available: telemetryAvailable || metrics.MemoryRequestsUsed > 0, unavailableLabel: telemetryStatus},
+		{label: "NVME STORAGE", value: storagePct, color: colorError, available: metrics.StorageRequestsUsed > 0, unavailableLabel: firstNonEmpty(telemetryStatus, "unavailable")},
+		{label: "NETWORK UP/DOWN", value: networkPct, color: colorSuccess, available: telemetryAvailable, unavailableLabel: telemetryStatus},
 	}
 	for index, item := range items {
 		if index > 0 {
@@ -194,14 +215,19 @@ func modernResourceMonitorLines(metrics api.MonitoringNamespaceMetrics, width in
 }
 
 type resourceMonitorItem struct {
-	label string
-	value int
-	color string
+	label            string
+	value            int
+	color            string
+	available        bool
+	unavailableLabel string
 }
 
 func modernResourceBar(item resourceMonitorItem, width int) []string {
 	value := clamp(item.value, 0, 100)
 	valueText := fmt.Sprintf("%d%%", value)
+	if !item.available {
+		valueText = firstNonEmpty(item.unavailableLabel, "unavailable")
+	}
 	labelStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(colorBgMain)).
 		Foreground(lipgloss.Color(colorTitle)).

@@ -157,6 +157,44 @@ func TestImageScannerCreateGitScan(t *testing.T) {
 	}
 }
 
+func TestImageScannerCreatePrivateExternalScan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["sourceKind"] != "external" ||
+			payload["imageRef"] != "ghcr.io/team/api:v2" ||
+			payload["registryUrl"] != "ghcr.io" ||
+			payload["imageName"] != "team/api" ||
+			payload["imageTag"] != "v2" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		if payload["privateRegistry"] != true || payload["username"] != "registry-user" || payload["password"] != "secret" {
+			t.Fatalf("private registry payload = %#v", payload)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(scanPayload("scan-external", "RUNNING"))
+	}))
+	defer server.Close()
+
+	client := NewImageScannerClient(server.URL)
+	client.client = server.Client()
+	_, err := client.CreateScan(context.Background(), "access", CreateImageScanInput{
+		SourceKind:      "external",
+		ImageRef:        "ghcr.io/team/api:v2",
+		RegistryURL:     "ghcr.io",
+		ImageName:       "team/api",
+		ImageTag:        "v2",
+		PrivateRegistry: true,
+		Username:        "registry-user",
+		Password:        "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func scanPayload(id, status string) map[string]any {
 	return map[string]any{
 		"id":              id,

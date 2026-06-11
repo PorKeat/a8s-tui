@@ -42,6 +42,31 @@ func TestMonitoringOverviewFetch(t *testing.T) {
 	}
 }
 
+func TestMonitoringOverviewOptionsMatchFrontendStagedFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("includeSeries") != "false" ||
+			r.URL.Query().Get("includeProjects") != "false" ||
+			r.URL.Query().Get("includeNamespaceDetails") != "false" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"namespace":"workspace-dev","namespaceMetrics":{"totalPods":1,"runningPods":1}}`)
+	}))
+	defer server.Close()
+
+	overview, err := NewObservabilityClient(server.URL).MonitoringOverviewWithOptions(
+		context.Background(),
+		"token",
+		MonitoringOverviewOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.NamespaceMetrics.TotalPods != 1 {
+		t.Fatalf("overview = %#v", overview)
+	}
+}
+
 func TestListPodsAndFetchPodLogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -600,6 +600,39 @@ func TestFetchDatabaseDeployment(t *testing.T) {
 	}
 }
 
+func TestFetchDatabaseDeploymentMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/database-deployments/db-1/metrics" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deploymentId":     "db-1",
+			"podName":          "orders-db-0",
+			"podPhase":         "Running",
+			"readyReplicas":    1,
+			"replicas":         1,
+			"cpuRequest":       "250m",
+			"memoryRequest":    "512Mi",
+			"storageRequested": "10Gi",
+		})
+	}))
+	defer server.Close()
+
+	client := NewProjectClient(server.URL)
+	client.client = server.Client()
+	metrics, err := client.FetchDatabaseDeploymentMetrics(context.Background(), "access", "db-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.DeploymentID != "db-1" || metrics.PodPhase != "Running" ||
+		metrics.ReadyReplicas != 1 || metrics.CPURequest != "250m" {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+}
+
 func TestDeleteLiveProjectRoutesByKind(t *testing.T) {
 	tests := []struct {
 		name        string

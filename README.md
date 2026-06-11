@@ -152,7 +152,7 @@ a8s-tui
 - **Project Details**: Get connection profiles, hostnames, ports, and JDBC URLs instantly.
 - **Database Deployments**: Create single-instance databases and database clusters (PostgreSQL, MySQL, MongoDB, Redis, Cassandra) with version and size selectors.
 - **Application Deployments**: Deploy monolithic apps or scan mono-repo and multi-repo GitHub sources into a microservice workspace.
-- **Image Scanner**: Load deployed container images, start Trivy scans, poll scan status, and review severity findings. The API client also supports Git-repository scan targets.
+- **Image Scanner**: Scan deployed Harbor images, external registry references, or Git repository builds; follow scan progress and review Trivy findings and reports.
 - **Logs**: Inspect workspace Kubernetes pods and load recent runtime log output directly in the terminal.
 - **Monitoring**: View namespace health, resource usage, pod status, and per-project metrics from the backend monitoring API.
 - **Live Deployment Logs**: Watch deployment logs stream directly to your terminal while new workloads are created.
@@ -199,9 +199,15 @@ The UI is highly responsive and designed for power users.
 
 **Image Scanner:**
 - `i`, then `Enter`: Open Image Scanner
-- `Left/Right`: Switch Scan and History
-- `Up/Down` or `j/k`: Move selected image or scan
-- `Enter`: Scan the selected image or open the selected history result with its Trivy report preview
+- `Left/Right`: Switch between Harbor, External, Git, and History
+- `Up/Down` or `j/k`: Move through images, scan history, or source fields
+- `Enter`: Advance through source fields, start a scan, or open a history result
+- `Space`: Toggle private registry/repository access while its field is selected
+- Paste external registry and Git repository values directly into the selected field
+- Harbor scans select a deployed image; External scans pull an image reference; Git scans clone, build, and scan the resulting image
+- Completed scans show severity counts, findings, and a Trivy JSON report preview
+- `n`: Return to Harbor and choose another source after viewing a result
+- `x`: Force a fresh rescan while viewing a source result
 - `r`: Refresh images and scan history
 
 **Observability:**

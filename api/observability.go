@@ -25,12 +25,22 @@ func NewObservabilityClient(baseURL string) ObservabilityClient {
 }
 
 type MonitoringOverview struct {
-	Namespace        string
-	GeneratedAt      string
-	Clusters         []MonitoringClusterMetric
-	NamespaceMetrics MonitoringNamespaceMetrics
-	NamespaceSeries  []MonitoringMetricSeries
-	Projects         []MonitoringProjectMetrics
+	Namespace              string
+	GeneratedAt            string
+	Clusters               []MonitoringClusterMetric
+	NamespaceMetrics       MonitoringNamespaceMetrics
+	NamespaceSeries        []MonitoringMetricSeries
+	Projects               []MonitoringProjectMetrics
+	TelemetryPending       bool
+	TelemetryUnavailable   bool
+	PodFallbackUsed        bool
+	AllocationFallbackUsed bool
+}
+
+type MonitoringOverviewOptions struct {
+	IncludeSeries           bool
+	IncludeProjects         bool
+	IncludeNamespaceDetails bool
 }
 
 type MonitoringClusterMetric struct {
@@ -113,6 +123,18 @@ type LogLine struct {
 }
 
 func (c ObservabilityClient) MonitoringOverview(ctx context.Context, token string) (MonitoringOverview, error) {
+	return c.MonitoringOverviewWithOptions(ctx, token, MonitoringOverviewOptions{
+		IncludeSeries:           true,
+		IncludeProjects:         true,
+		IncludeNamespaceDetails: true,
+	})
+}
+
+func (c ObservabilityClient) MonitoringOverviewWithOptions(
+	ctx context.Context,
+	token string,
+	options MonitoringOverviewOptions,
+) (MonitoringOverview, error) {
 	endpoint, err := url.JoinPath(c.baseURL, "/api/v1/monitoring/overview")
 	if err != nil {
 		return MonitoringOverview{}, err
@@ -122,9 +144,9 @@ func (c ObservabilityClient) MonitoringOverview(ctx context.Context, token strin
 		return MonitoringOverview{}, err
 	}
 	query := overviewURL.Query()
-	query.Set("includeSeries", "true")
-	query.Set("includeProjects", "true")
-	query.Set("includeNamespaceDetails", "true")
+	query.Set("includeSeries", fmt.Sprintf("%t", options.IncludeSeries))
+	query.Set("includeProjects", fmt.Sprintf("%t", options.IncludeProjects))
+	query.Set("includeNamespaceDetails", fmt.Sprintf("%t", options.IncludeNamespaceDetails))
 	overviewURL.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, overviewURL.String(), nil)

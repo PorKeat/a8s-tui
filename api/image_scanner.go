@@ -95,6 +95,7 @@ type CreateImageScanInput struct {
 	DockerfilePath    string
 	BuildContext      string
 	TargetImageName   string
+	PrivateRegistry   bool
 	PrivateRepository bool
 	Username          string
 	Password          string
@@ -182,7 +183,11 @@ func (c ImageScannerClient) CreateScan(ctx context.Context, token string, input 
 		body["registryUrl"] = strings.TrimSpace(input.RegistryURL)
 		body["imageName"] = strings.TrimSpace(input.ImageName)
 		body["imageTag"] = strings.TrimSpace(input.ImageTag)
-		body["privateRegistry"] = false
+		body["privateRegistry"] = input.PrivateRegistry
+		if input.PrivateRegistry {
+			body["username"] = strings.TrimSpace(input.Username)
+			body["password"] = input.Password
+		}
 	case "git":
 		body["repositoryUrl"] = strings.TrimSpace(input.RepositoryURL)
 		body["branchOrTag"] = firstNonEmpty(strings.TrimSpace(input.BranchOrTag), "main")
